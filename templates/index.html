@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Live Gift Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        tiktok: { pink: '#fe2c55', cyan: '#25f4ee' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @keyframes pulse-glow {
+            0%, 100% { box-shadow: 0 0 8px rgba(37, 244, 238, 0.4); }
+            50% { box-shadow: 0 0 20px rgba(37, 244, 238, 0.8); }
+        }
+        .live-badge { animation: pulse-glow 2s ease-in-out infinite; }
+        @keyframes slide-in {
+            from { opacity: 0; transform: translateX(-12px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .gift-item { animation: slide-in 0.3s ease-out; }
+        .scroll-area::-webkit-scrollbar { width: 6px; }
+        .scroll-area::-webkit-scrollbar-track { background: #1f2937; }
+        .scroll-area::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-6">
+        <header class="flex items-center gap-3 mb-6">
+            <svg class="w-8 h-8 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                <path d="M12.5 2C12.5 2 12.5 8 12.5 10.5C12.5 13 10.5 15 8 15C5.5 15 3.5 13 3.5 10.5" stroke="#fe2c55" stroke-width="2.5" stroke-linecap="round"/>
+                <path d="M16.5 4C18.5 5.5 19.5 8 19.5 10.5C19.5 15 16 18.5 12 19" stroke="#25f4ee" stroke-width="2.5" stroke-linecap="round"/>
+                <path d="M12 19V22" stroke="#fe2c55" stroke-width="2.5" stroke-linecap="round"/>
+                <path d="M8 22H16" stroke="#25f4ee" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
+            <h1 class="text-2xl font-bold bg-gradient-to-r from-tiktok-cyan to-tiktok-pink bg-clip-text text-transparent">TikTok Live Gift Tracker</h1>
+        </header>
+
+        <div class="flex gap-3 mb-5">
+            <div class="relative flex-1">
+                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-lg">@</span>
+                <input id="usernameInput" type="text" placeholder="Enter username to track permanently..."
+                    class="w-full pl-8 pr-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-tiktok-cyan focus:ring-1 focus:ring-tiktok-cyan transition-colors" />
+            </div>
+            <button onclick="trackUser()" class="px-6 py-3 bg-gradient-to-r from-tiktok-pink to-pink-600 hover:from-pink-600 hover:to-tiktok-pink text-white font-semibold rounded-lg transition-all duration-200 active:scale-95">Track</button>
+        </div>
+
+        <div id="trackedBar" class="mb-5"></div>
+
+        <div id="emptyState" class="flex flex-col items-center justify-center py-24 text-gray-500">
+            <svg class="w-16 h-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+            </svg>
+            <p class="text-lg mb-1">No tracked users yet</p>
+            <p class="text-sm">Enter a TikTok @username above to start permanent tracking</p>
+        </div>
+
+        <div id="dashboard" class="hidden">
+            <div class="flex items-center gap-3 mb-4">
+                <span id="selectedLabel" class="text-xl font-semibold"></span>
+                <span id="statusBadge" class="px-3 py-1 text-sm font-medium rounded-full"></span>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div class="text-gray-400 text-xs mb-1 uppercase tracking-wide">Current Stream</div>
+                    <div id="streamEarnings" class="text-2xl font-bold text-tiktok-cyan">$0.00</div>
+                    <div id="streamGiftCount" class="text-gray-500 text-xs mt-1">0 gifts</div>
+                </div>
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div class="text-gray-400 text-xs mb-1 uppercase tracking-wide">Past Streams</div>
+                    <div id="historicalEarnings" class="text-2xl font-bold text-purple-400">$0.00</div>
+                    <div id="historicalInfo" class="text-gray-500 text-xs mt-1">0 gifts from 0 streams</div>
+                </div>
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div class="text-gray-400 text-xs mb-1 uppercase tracking-wide">All-Time Total</div>
+                    <div id="totalEarnings" class="text-2xl font-bold text-tiktok-pink">$0.00</div>
+                    <div id="totalGiftCount" class="text-gray-500 text-xs mt-1">0 gifts total</div>
+                </div>
+                <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                    <div class="text-gray-400 text-xs mb-1 uppercase tracking-wide">Status</div>
+                    <div id="streamStatus" class="text-2xl font-bold">--</div>
+                    <div id="connectedSince" class="text-gray-500 text-xs mt-1"></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                <div class="lg:col-span-2 space-y-5">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-base font-semibold">Gift Feed <span class="text-gray-500 font-normal text-sm">(all time)</span></h2>
+                            <select id="feedFilter" onchange="fetchGifts()" class="bg-gray-800 border border-gray-700 text-sm rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-tiktok-cyan">
+                                <option value="all">All Streams</option>
+                                <option value="current">Current Stream Only</option>
+                            </select>
+                        </div>
+                        <div id="giftFeed" class="scroll-area max-h-80 overflow-y-auto space-y-1.5">
+                            <p class="text-gray-500 text-center py-6 text-sm">No gifts recorded yet.</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                        <h2 class="text-base font-semibold mb-3">Stream History</h2>
+                        <div id="streamsList" class="scroll-area max-h-72 overflow-y-auto space-y-2">
+                            <p class="text-gray-500 text-center py-6 text-sm">No stream history yet.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-5">
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                        <h2 class="text-base font-semibold mb-3">Top Gifters <span class="text-gray-500 font-normal text-sm">(all time)</span></h2>
+                        <div id="giftersList" class="scroll-area max-h-96 overflow-y-auto space-y-2">
+                            <p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed top-4 right-4 hidden px-4 py-2 rounded-lg shadow-lg text-sm max-w-sm z-50"></div>
+
+    <script>
+        let selectedUser = null;
+        let lastGiftId = 0;
+        let pollTimer = null;
+        let trackedTimer = null;
+
+        document.getElementById('usernameInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') trackUser();
+        });
+
+        async function trackUser() {
+            const raw = document.getElementById('usernameInput').value.trim();
+            if (!raw) return;
+            const username = raw.replace(/^@/, '').toLowerCase();
+            document.getElementById('usernameInput').value = '';
+            showToast('Connecting to @' + username + '...', 'info');
+            try {
+                const resp = await fetch('/api/listen', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username })
+                });
+                const data = await resp.json();
+                if (!resp.ok) { showToast(data.error || 'Failed', 'error'); return; }
+                showToast('Now tracking @' + username, 'success');
+                selectUser(username);
+                refreshTracked();
+            } catch (err) {
+                showToast('Network error: ' + err.message, 'error');
+            }
+        }
+
+        async function stopTracking(username) {
+            try { await fetch('/api/listen/' + username, { method: 'DELETE' }); } catch (e) {}
+            if (selectedUser === username) { selectedUser = null; showDashboard(false); }
+            refreshTracked();
+        }
+
+        function selectUser(username) {
+            selectedUser = username;
+            lastGiftId = 0;
+            showDashboard(true);
+            document.getElementById('selectedLabel').textContent = '@' + username;
+            fetchAllData();
+            refreshTracked();
+        }
+
+        function showDashboard(show) {
+            document.getElementById('emptyState').classList.toggle('hidden', show);
+            document.getElementById('dashboard').classList.toggle('hidden', !show);
+        }
+
+        async function refreshTracked() {
+            try {
+                const resp = await fetch('/api/tracked');
+                const users = await resp.json();
+                renderTrackedBar(users);
+                if (selectedUser && !show) showDashboard(true);
+            } catch (e) {}
+        }
+
+        function renderTrackedBar(users) {
+            const bar = document.getElementById('trackedBar');
+            if (!users || users.length === 0) { bar.innerHTML = ''; return; }
+            bar.innerHTML = '<div class="flex flex-wrap gap-2">' + users.map(u => {
+                const sel = u.username === selectedUser;
+                const dot = u.live
+                    ? '<span class="w-2.5 h-2.5 rounded-full bg-green-400 live-badge flex-shrink-0"></span>'
+                    : '<span class="w-2.5 h-2.5 rounded-full bg-gray-600 flex-shrink-0"></span>';
+                return '<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 border ' + (sel ? 'border-tiktok-cyan' : 'border-gray-800') + ' cursor-pointer hover:border-gray-600 transition-colors min-w-[150px]" onclick="selectUser(\'' + u.username + '\')">'
+                    + dot
+                    + '<div class="flex-1 min-w-0"><div class="text-sm font-medium truncate">' + u.username + '</div><div class="text-xs text-gray-500">$' + u.total_earnings.toFixed(2) + ' &middot; ' + u.total_gifts + ' gifts</div></div>'
+                    + '<button onclick="event.stopPropagation(); stopTracking(\'' + u.username + '\')" class="text-gray-600 hover:text-red-400 transition-colors flex-shrink-0"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+                    + '</div>';
+            }).join('') + '</div>';
+        }
+
+        async function fetchAllData() {
+            await Promise.all([fetchEarnings(), fetchGifts(), fetchStatus(), fetchStreams(), fetchTopGifters()]);
+        }
+
+        async function fetchEarnings() {
+            if (!selectedUser) return;
+            try {
+                const resp = await fetch('/api/earnings/' + selectedUser);
+                const d = await resp.json();
+                document.getElementById('streamEarnings').textContent = '$' + d.stream_earnings.toFixed(2);
+                document.getElementById('streamGiftCount').textContent = d.stream_gift_count + ' gifts this stream';
+                document.getElementById('historicalEarnings').textContent = '$' + d.historical_earnings.toFixed(2);
+                document.getElementById('historicalInfo').textContent = d.historical_gift_count + ' gifts from ' + (d.total_streams - (d.stream_earnings > 0 ? 1 : 0)) + ' past streams';
+                document.getElementById('totalEarnings').textContent = '$' + d.total_earnings.toFixed(2);
+                document.getElementById('totalGiftCount').textContent = d.total_gift_count + ' gifts across ' + d.total_streams + ' streams';
+            } catch (e) {}
+        }
+
+        async function fetchGifts() {
+            if (!selectedUser) return;
+            try {
+                const filter = document.getElementById('feedFilter').value;
+                let url = '/api/gifts/' + selectedUser + '?limit=100';
+                if (filter === 'current') {
+                    const statusResp = await fetch('/api/status/' + selectedUser);
+                    const status = await statusResp.json();
+                    if (status.stream_id) url += '&stream_id=' + status.stream_id;
+                }
+                const resp = await fetch(url);
+                const gifts = await resp.json();
+                renderGiftFeed(gifts);
+            } catch (e) {}
+        }
+
+        async function fetchStatus() {
+            if (!selectedUser) return;
+            try {
+                const resp = await fetch('/api/status/' + selectedUser);
+                const d = await resp.json();
+                const badge = document.getElementById('statusBadge');
+                const status = document.getElementById('streamStatus');
+                const since = document.getElementById('connectedSince');
+                if (d.status === 'live') {
+                    badge.textContent = 'LIVE';
+                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-green-500/20 text-green-400 live-badge';
+                    status.textContent = 'Live';
+                    status.className = 'text-2xl font-bold text-green-400';
+                    since.textContent = d.connected_at ? 'Since ' + new Date(d.connected_at).toLocaleTimeString() : '';
+                } else if (d.status === 'offline') {
+                    badge.textContent = 'OFFLINE \u2013 RECONNECTING';
+                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-yellow-500/20 text-yellow-400';
+                    status.textContent = 'Reconnecting...';
+                    status.className = 'text-2xl font-bold text-yellow-400';
+                    since.textContent = 'Auto-reconnect enabled';
+                } else {
+                    badge.textContent = 'NOT TRACKED';
+                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-gray-700 text-gray-400';
+                    status.textContent = '--';
+                    status.className = 'text-2xl font-bold text-gray-500';
+                    since.textContent = '';
+                }
+            } catch (e) {}
+        }
+
+        async function fetchStreams() {
+            if (!selectedUser) return;
+            try {
+                const resp = await fetch('/api/streams/' + selectedUser);
+                const streams = await resp.json();
+                renderStreams(streams);
+            } catch (e) {}
+        }
+
+        async function fetchTopGifters() {
+            if (!selectedUser) return;
+            try {
+                const resp = await fetch('/api/top-gifters/' + selectedUser);
+                const gifters = await resp.json();
+                renderTopGifters(gifters);
+            } catch (e) {}
+        }
+
+        function renderGiftFeed(gifts) {
+            const feed = document.getElementById('giftFeed');
+            if (!gifts || gifts.length === 0) {
+                feed.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No gifts recorded yet.</p>';
+                return;
+            }
+            const wasAtBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+            feed.innerHTML = gifts.map(g => {
+                const isNew = g.id > lastGiftId;
+                return '<div class="gift-item flex items-center justify-between px-2.5 py-2 rounded-lg ' + (isNew ? 'bg-gray-800/80' : 'bg-gray-800/40') + '">'
+                    + '<div class="flex items-center gap-2 min-w-0">'
+                    + '<div class="w-7 h-7 rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center text-[10px] font-bold flex-shrink-0">' + g.sender.charAt(0).toUpperCase() + '</div>'
+                    + '<div class="min-w-0">'
+                    + '<span class="font-medium text-sm">' + esc(g.sender) + '</span>'
+                    + '<span class="text-gray-500 text-sm"> \u2192 </span>'
+                    + '<span class="text-tiktok-cyan text-sm font-medium">' + esc(g.gift_name) + '</span>'
+                    + '</div></div>'
+                    + '<div class="text-right flex-shrink-0 ml-2">'
+                    + '<span class="text-sm font-medium">' + g.diamond_value + '\u{1F48E}</span>'
+                    + '<span class="text-gray-500 text-xs ml-2">' + fmtTs(g.timestamp) + '</span>'
+                    + '</div></div>';
+            }).join('');
+            lastGiftId = Math.max(lastGiftId, gifts[0].id);
+            if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
+        }
+
+        function renderStreams(streams) {
+            const el = document.getElementById('streamsList');
+            if (!streams || streams.length === 0) {
+                el.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No stream history yet.</p>';
+                return;
+            }
+            el.innerHTML = streams.map((s, i) => {
+                const start = s.started_at ? new Date(s.started_at).toLocaleString() : 'Unknown';
+                const last = s.last_gift_at ? new Date(s.last_gift_at).toLocaleTimeString() : '';
+                return '<div class="bg-gray-800/40 rounded-lg p-3 border border-gray-700/40">'
+                    + '<div class="flex items-center justify-between gap-2">'
+                    + '<div class="min-w-0">'
+                    + '<div class="text-sm font-semibold text-gray-200">Stream #' + (streams.length - i) + ' <span class="text-gray-600 font-normal text-xs ml-1">' + s.stream_id.substring(0, 12) + '...</span></div>'
+                    + '<div class="text-xs text-gray-500">' + start + (last ? ' \u2013 ' + last : '') + '</div>'
+                    + '</div>'
+                    + '<div class="text-right flex-shrink-0">'
+                    + '<div class="text-base font-bold text-tiktok-cyan">$' + s.total_usd + '</div>'
+                    + '<div class="text-xs text-gray-500">' + s.gift_count + ' gifts &middot; ' + s.unique_senders + ' senders</div>'
+                    + '</div></div>'
+                    + '<button onclick="toggleStreamGifts(\'' + selectedUser + '\',\'' + s.stream_id + '\',this)" class="text-xs text-tiktok-cyan hover:underline cursor-pointer mt-1.5">View gifts</button>'
+                    + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>'
+                    + '</div>';
+            }).join('');
+        }
+
+        async function toggleStreamGifts(username, streamId, btn) {
+            const container = btn.nextElementSibling;
+            if (!container.classList.contains('hidden')) {
+                container.classList.add('hidden');
+                btn.textContent = 'View gifts';
+                return;
+            }
+            btn.textContent = 'Hide';
+            container.classList.remove('hidden');
+            if (container.dataset.loaded === 'true') return;
+            try {
+                const resp = await fetch('/api/gifts/' + username + '?stream_id=' + streamId + '&limit=200');
+                const gifts = await resp.json();
+                container.innerHTML = gifts.length === 0
+                    ? '<p class="text-gray-500 text-sm py-2">No gifts.</p>'
+                    : gifts.map(g => '<div class="flex items-center justify-between px-2 py-1 rounded bg-gray-900/50 text-xs">'
+                        + '<div class="flex items-center gap-1.5 min-w-0">'
+                        + '<span class="font-medium">' + esc(g.sender) + '</span>'
+                        + '<span class="text-gray-600">\u2192</span>'
+                        + '<span class="text-tiktok-cyan">' + esc(g.gift_name) + '</span>'
+                        + '</div>'
+                        + '<div class="flex items-center gap-2 flex-shrink-0">'
+                        + '<span class="text-gray-400">' + g.diamond_value + '\u{1F48E}</span>'
+                        + '<span class="text-gray-600">' + fmtTs(g.timestamp) + '</span>'
+                        + '</div></div>').join('');
+                container.dataset.loaded = 'true';
+            } catch (e) {}
+        }
+
+        function renderTopGifters(gifters) {
+            const el = document.getElementById('giftersList');
+            if (!gifters || gifters.length === 0) {
+                el.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>';
+                return;
+            }
+            const topUsd = gifters[0].total_usd || 1;
+            el.innerHTML = gifters.map((g, i) => {
+                const medal = i === 0 ? '\u{1F947}' : i === 1 ? '\u{1F948}' : i === 2 ? '\u{1F949}' : '<span class="text-gray-600 text-xs">' + (i + 1) + '</span>';
+                const pct = Math.max(5, (g.total_usd / topUsd) * 100);
+                return '<div class="flex items-center gap-2 px-2 py-2 rounded-lg bg-gray-800/30">'
+                    + '<div class="w-6 text-center text-sm">' + medal + '</div>'
+                    + '<div class="flex-1 min-w-0">'
+                    + '<div class="flex items-center justify-between mb-0.5">'
+                    + '<span class="font-medium text-sm truncate">' + esc(g.sender) + '</span>'
+                    + '<span class="text-sm font-bold text-tiktok-cyan ml-1">$' + g.total_usd + '</span>'
+                    + '</div>'
+                    + '<div class="flex items-center gap-2">'
+                    + '<div class="flex-1 bg-gray-700 rounded-full h-1">'
+                    + '<div class="bg-gradient-to-r from-tiktok-cyan to-tiktok-pink h-1 rounded-full" style="width:' + pct + '%"></div>'
+                    + '</div>'
+                    + '<span class="text-[10px] text-gray-500 flex-shrink-0">' + g.gift_count + 'x</span>'
+                    + '</div></div></div>';
+            }).join('');
+        }
+
+        function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+        function fmtTs(ts) { if (!ts) return ''; try { return new Date(ts).toLocaleTimeString(); } catch { return ts; } }
+
+        let toastTimeout = null;
+        function showToast(msg, type) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'fixed top-4 right-4 px-4 py-2 rounded-lg shadow-lg text-sm max-w-sm z-50';
+            t.classList.add(type === 'error' ? 'bg-red-600' : type === 'success' ? 'bg-green-600' : 'bg-gray-700', 'text-white');
+            t.classList.remove('hidden');
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => t.classList.add('hidden'), 3000);
+        }
+
+        function startPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            if (trackedTimer) clearInterval(trackedTimer);
+            pollTimer = setInterval(() => {
+                fetchEarnings();
+                fetchGifts();
+                fetchStatus();
+                fetchTopGifters();
+            }, 3000);
+            trackedTimer = setInterval(() => {
+                refreshTracked();
+                fetchStreams();
+            }, 10000);
+            refreshTracked();
+        }
+
+        startPolling();
+    </script>
+</body>
+</html>
