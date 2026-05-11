@@ -2,9 +2,23 @@
 
 Real-time gift tracking dashboard for TikTok live streams. Connects to public TikTok WebSockets (no API keys required) and tracks every gift sent during a livestream with persistent historical data.
 
+[![Live site — GitHub Pages](https://img.shields.io/badge/site-GitHub%20Pages-222?style=for-the-badge&logo=github&logoColor=white)](https://chartmann1590.github.io/tiktok-live-gift-tracker/)
+[![View on GitHub](https://img.shields.io/badge/code-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/chartmann1590/tiktok-live-gift-tracker)
+
 ![Docker](https://img.shields.io/badge/Docker-ready-blue)
 ![Python](https://img.shields.io/badge/Python-3.12-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
+
+## Support & sponsor
+
+This project is **MIT-licensed and free to self-host** — no paywalls, no API keys, no tracking. If it helps your stream, your agency, or your workflow, **consider sponsoring** so I can keep improving reliability, docs, and features.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/chartmann1590)
+
+**Why sponsor?** Your support pays for time on bug fixes, compatibility when TikTok changes behavior, better dashboards, and keeping the docs site (above) up to date. Even a small monthly amount helps a lot — thank you.
+
+- **GitHub Sponsors:** [github.com/sponsors/chartmann1590](https://github.com/sponsors/chartmann1590) (recurring or one-time)
+- **Project site (docs & overview):** [chartmann1590.github.io/tiktok-live-gift-tracker](https://chartmann1590.github.io/tiktok-live-gift-tracker/)
 
 ## Features
 

@@ -3,7 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Live Gift Tracker</title>
+    <title>TikTok Live Gift Tracker — real-time gift analytics for TikTok Live</title>
+    <meta name="description" content="Self-hosted TikTok Live gift tracker: real-time gifts, SQLite history, multi-streamer support, Docker one-command deploy. Open source, no API keys. Sponsor development on GitHub.">
+    <meta name="keywords" content="TikTok Live, gift tracker, TikTok gifts, livestream analytics, SQLite, Docker, Flask, open source, TikTokLive, self-hosted">
+    <meta name="author" content="https://github.com/chartmann1590">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#030712">
+    <link rel="canonical" href="https://chartmann1590.github.io/tiktok-live-gift-tracker/">
+    <link rel="sitemap" type="application/xml" title="Sitemap" href="https://chartmann1590.github.io/tiktok-live-gift-tracker/sitemap.xml">
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://chartmann1590.github.io/tiktok-live-gift-tracker/">
+    <meta property="og:title" content="TikTok Live Gift Tracker">
+    <meta property="og:description" content="Track every gift on TikTok Live in real time. Self-hosted dashboard, persistent history, Docker deploy — no API keys. Support the project on GitHub Sponsors.">
+    <meta property="og:site_name" content="TikTok Live Gift Tracker">
+    <meta property="og:locale" content="en_US">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="TikTok Live Gift Tracker">
+    <meta name="twitter:description" content="Real-time TikTok Live gift tracking. Open source, self-hosted, Docker-ready.">
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "TikTok Live Gift Tracker",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Docker, Linux, macOS, Windows",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "license": "https://opensource.org/licenses/MIT",
+      "description": "Self-hosted dashboard that captures TikTok Live gifts in real time with SQLite storage and REST API.",
+      "url": "https://chartmann1590.github.io/tiktok-live-gift-tracker/",
+      "codeRepository": "https://github.com/chartmann1590/tiktok-live-gift-tracker",
+      "author": { "@type": "Person", "name": "chartmann1590", "url": "https://github.com/chartmann1590" }
+    }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -42,6 +76,11 @@
             border: 1px solid #21262d;
             border-radius: 8px;
         }
+        .sponsor-glow {
+            background: linear-gradient(135deg, rgba(234, 74, 170, 0.12) 0%, rgba(37, 244, 238, 0.08) 50%, rgba(254, 44, 85, 0.1) 100%);
+            border: 1px solid rgba(234, 74, 170, 0.35);
+            box-shadow: 0 0 60px rgba(234, 74, 170, 0.08), inset 0 1px 0 rgba(255,255,255,0.04);
+        }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100">
@@ -61,6 +100,7 @@
                 <a href="#features" class="text-gray-400 hover:text-white transition-colors">Features</a>
                 <a href="#setup" class="text-gray-400 hover:text-white transition-colors">Setup</a>
                 <a href="#api" class="text-gray-400 hover:text-white transition-colors">API</a>
+                <a href="#sponsor" class="text-pink-400 hover:text-pink-300 transition-colors font-medium">Sponsor</a>
                 <a href="https://github.com/chartmann1590/tiktok-live-gift-tracker" class="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors">
                     <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
                     GitHub
@@ -90,6 +130,10 @@
                 <a href="#setup" class="inline-flex items-center gap-2 px-6 py-3 bg-gray-800 border border-gray-700 text-white font-semibold rounded-lg hover:border-gray-500 transition-colors">
                     <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     Quick Start
+                </a>
+                <a href="#sponsor" class="inline-flex items-center gap-2 px-6 py-3 font-semibold rounded-lg text-white border border-pink-500/50 bg-gradient-to-r from-pink-600/30 to-purple-600/20 hover:from-pink-500/40 hover:to-purple-500/30 transition-all shadow-lg shadow-pink-900/20">
+                    <svg class="w-5 h-5 text-pink-300" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                    Support the project
                 </a>
             </div>
         </div>
@@ -237,6 +281,33 @@ cd tiktok-live-gift-tracker</code></pre>
         </div>
     </section>
 
+    <section id="sponsor" class="py-20 px-6 scroll-mt-24">
+        <div class="max-w-3xl mx-auto">
+            <div class="sponsor-glow rounded-2xl p-8 md:p-10 text-center">
+                <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-pink-500/15 border border-pink-500/30 mb-5">
+                    <svg class="w-8 h-8 text-pink-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                </div>
+                <h2 class="text-3xl md:text-4xl font-extrabold mb-3">Love this tool? Fuel the next release</h2>
+                <p class="text-gray-300 text-lg leading-relaxed mb-2 max-w-2xl mx-auto">
+                    TikTok Live Gift Tracker is <strong class="text-white">100% free and open source</strong> (MIT). No subscriptions, no API keys, no tricks — just a solid dashboard you can self-host.
+                </p>
+                <p class="text-gray-400 mb-8 max-w-xl mx-auto leading-relaxed">
+                    Building and maintaining it takes real time: keeping up when TikTok changes behavior, polishing the UI, writing docs, and answering issues. If this project saves you time or helps your stream or business, <strong class="text-gray-200">a sponsorship directly funds that work</strong>. One-time or monthly — every contribution matters.
+                </p>
+                <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+                    <a href="https://github.com/sponsors/chartmann1590" class="inline-flex items-center gap-2.5 px-8 py-4 rounded-xl font-bold text-white bg-gradient-to-r from-pink-600 to-pink-500 hover:from-pink-500 hover:to-pink-400 transition-all shadow-xl shadow-pink-900/40 border border-pink-400/30 text-lg">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                        Sponsor on GitHub
+                    </a>
+                    <a href="https://github.com/chartmann1590/tiktok-live-gift-tracker" class="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl font-semibold text-gray-200 border border-gray-600 bg-gray-900/80 hover:border-gray-400 hover:text-white transition-colors">
+                        Star the repo
+                    </a>
+                </div>
+                <p class="text-xs text-gray-500 mt-6">GitHub Sponsors · secure checkout · public thank-you on your profile optional</p>
+            </div>
+        </div>
+    </section>
+
     <section class="py-20 px-6 bg-gray-900/30">
         <div class="max-w-5xl mx-auto text-center">
             <h2 class="text-3xl font-bold mb-4">How it works</h2>
@@ -268,8 +339,9 @@ cd tiktok-live-gift-tracker</code></pre>
                 </svg>
                 <span class="text-sm text-gray-400">TikTok Live Gift Tracker</span>
             </div>
-            <div class="flex items-center gap-6 text-sm text-gray-500">
+            <div class="flex flex-wrap items-center justify-center gap-6 text-sm text-gray-500">
                 <a href="https://github.com/chartmann1590/tiktok-live-gift-tracker" class="hover:text-white transition-colors">GitHub</a>
+                <a href="#sponsor" class="text-pink-400/90 hover:text-pink-300 transition-colors">Sponsor</a>
                 <span>MIT License</span>
                 <span>Built with Flask + TikTokLive + SQLite</span>
             </div>
