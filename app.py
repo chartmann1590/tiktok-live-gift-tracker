@@ -15,6 +15,8 @@ from TikTokLive.events import (
     ConnectEvent,
     DisconnectEvent,
     LiveEndEvent,
+    CommentEvent,
+    EmoteChatEvent,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,6 +84,49 @@ def init_db():
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            sender_unique_id TEXT,
+            message TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            msg_id TEXT,
+            timestamp DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_username ON chat_messages(username)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_username_stream ON chat_messages(username, stream_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_messages(timestamp)"
+    )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
+    if "msg_id" not in cols:
+        conn.execute("ALTER TABLE chat_messages ADD COLUMN msg_id TEXT")
+    existing_indexes = {r[1] for r in conn.execute("PRAGMA index_list(chat_messages)").fetchall()}
+    if "idx_chat_dedup" in existing_indexes:
+        conn.execute("DROP INDEX idx_chat_dedup")
+    conn.execute(
+        "DELETE FROM chat_messages WHERE id NOT IN (SELECT MIN(id) FROM chat_messages GROUP BY username, sender, message, stream_id)"
+    )
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_dedup ON chat_messages(msg_id)"
+        )
+    except sqlite3.IntegrityError:
+        conn.execute(
+            "DELETE FROM chat_messages WHERE id NOT IN (SELECT MIN(id) FROM chat_messages WHERE msg_id IS NOT NULL GROUP BY msg_id)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_dedup ON chat_messages(msg_id)"
+        )
     conn.commit()
     conn.close()
 
@@ -96,6 +141,18 @@ def _insert_gift(username, sender, gift_name, diamond_value, usd_value, stream_i
         conn.execute(
             "INSERT INTO gifts (username, sender, gift_name, diamond_value, usd_value, stream_id) VALUES (?, ?, ?, ?, ?, ?)",
             (username, sender, gift_name, diamond_value, usd_value, stream_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_chat_message(username, sender, sender_uid, message, stream_id, msg_id=None):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO chat_messages (username, sender, sender_unique_id, message, stream_id, msg_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (username, sender, sender_uid, message, stream_id, msg_id),
         )
         conn.commit()
     finally:
@@ -156,10 +213,12 @@ async def _run_listener(username: str):
         connected = asyncio.Event()
         stream_id_holder = [None]
         gift_catalog: dict[int, int] = {}
+        _recent_chat: set[str] = set()
 
         @client.on(ConnectEvent)
         async def on_connect(event: ConnectEvent):
             stream_id_holder[0] = str(client.room_id)
+            _recent_chat.clear()
             connected.set()
             with active_lock:
                 if username in active_listeners:
@@ -171,21 +230,18 @@ async def _run_listener(username: str):
             try:
                 ri = client.room_info
                 if isinstance(ri, dict):
-                    avatar_url = None
-                    for get_url in [
-                        lambda: ri["data"]["owner"]["avatar_thumb"]["url_list"][0],
-                        lambda: ri["data"]["owner"]["avatar_thumb"][0],
-                        lambda: ri["owner"]["avatar_thumb"]["url_list"][0],
-                        lambda: ri["data"]["user"]["avatar_thumb"]["url_list"][0],
-                    ]:
-                        try:
-                            avatar_url = get_url()
-                            if avatar_url:
+                    for key in ("owner", "user"):
+                        owner = ri.get(key, {})
+                        if isinstance(owner, dict):
+                            for thumb_key in ("avatar_thumb", "avatar_medium", "avatar_large"):
+                                thumb = owner.get(thumb_key)
+                                if isinstance(thumb, dict):
+                                    urls = thumb.get("url_list", [])
+                                    if urls and isinstance(urls, list):
+                                        streamer_avatars[username] = urls[0]
+                                        break
+                            if username in streamer_avatars:
                                 break
-                        except (KeyError, TypeError, IndexError):
-                            continue
-                    if avatar_url:
-                        streamer_avatars[username] = avatar_url
             except Exception:
                 pass
 
@@ -212,9 +268,17 @@ async def _run_listener(username: str):
 
             sender_name = event.user.nickname or event.user.unique_id
             try:
-                pic = getattr(event.user, "profile_picture_url", None)
-                if pic:
-                    sender_avatars[sender_name] = pic
+                at = getattr(event.user, "avatar_thumb", None)
+                if at and getattr(at, "m_urls", None):
+                    sender_avatars[sender_name] = at.m_urls[0]
+            except Exception:
+                pass
+            try:
+                to = getattr(event, "to_user", None)
+                if to and username not in streamer_avatars:
+                    at2 = getattr(to, "avatar_thumb", None)
+                    if at2 and getattr(at2, "m_urls", None):
+                        streamer_avatars[username] = at2.m_urls[0]
             except Exception:
                 pass
 
@@ -237,8 +301,54 @@ async def _run_listener(username: str):
                 sid,
             )
 
+        @client.on(CommentEvent)
+        async def on_comment(event: CommentEvent):
+            try:
+                msg_id = str(getattr(getattr(event, "base_message", None), "message_id", "")) or None
+                sender_name = event.user.nickname or event.user.unique_id or ""
+                sender_uid = event.user.unique_id or ""
+                msg = event.comment or ""
+                sid = stream_id_holder[0] or "unknown"
+                if msg_id and msg_id in _recent_chat:
+                    return
+                if msg_id:
+                    _recent_chat.add(msg_id)
+                    if len(_recent_chat) > 5000:
+                        _recent_chat.clear()
+                _insert_chat_message(username, sender_name, sender_uid, msg, sid, msg_id)
+            except Exception:
+                pass
+
+        @client.on(EmoteChatEvent)
+        async def on_emote_chat(event: EmoteChatEvent):
+            try:
+                msg_id = str(getattr(getattr(event, "base_message", None), "message_id", "")) or None
+                sender_name = ""
+                sender_uid = ""
+                user = getattr(event, "user", None)
+                if user:
+                    sender_name = getattr(user, "nickname", "") or getattr(user, "unique_id", "")
+                    sender_uid = getattr(user, "unique_id", "") or ""
+                msg = getattr(event, "content", "") or ""
+                if not msg:
+                    emote = getattr(event, "emote", None)
+                    if emote:
+                        msg = getattr(emote, "name", "[emote]") or "[emote]"
+                if not msg:
+                    return
+                sid = stream_id_holder[0] or "unknown"
+                if msg_id and msg_id in _recent_chat:
+                    return
+                if msg_id:
+                    _recent_chat.add(msg_id)
+                    if len(_recent_chat) > 5000:
+                        _recent_chat.clear()
+                _insert_chat_message(username, sender_name, sender_uid, msg, sid, msg_id)
+            except Exception:
+                pass
+
         try:
-            task = await client.start(fetch_gift_info=True)
+            task = await client.start(fetch_gift_info=True, fetch_room_info=True)
             gift_catalog.clear()
             gift_catalog.update(index_gift_catalog(client.gift_info))
 
@@ -602,6 +712,88 @@ def api_top_gifters(username):
             d["avatar_url"] = sender_avatars.get(r["sender"])
             result.append(d)
         return jsonify(result)
+    finally:
+        conn.close()
+
+
+@app.route("/api/chat/<username>")
+def api_chat(username):
+    username = normalize_username(username)
+    limit = request.args.get("limit", 100, type=int)
+    limit = min(max(limit, 1), 500)
+    stream_id = request.args.get("stream_id", None)
+    offset = request.args.get("offset", 0, type=int)
+
+    conn = get_db()
+    try:
+        if stream_id:
+            rows = conn.execute(
+                "SELECT id, sender, sender_unique_id, message, stream_id, timestamp FROM chat_messages WHERE username = ? AND stream_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (username, stream_id, limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, sender, sender_unique_id, message, stream_id, timestamp FROM chat_messages WHERE username = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (username, limit, offset),
+            ).fetchall()
+        messages = []
+        for r in rows:
+            messages.append({
+                "id": r["id"],
+                "sender": r["sender"],
+                "sender_unique_id": r["sender_unique_id"],
+                "message": r["message"],
+                "stream_id": r["stream_id"],
+                "timestamp": r["timestamp"],
+            })
+        return jsonify(messages)
+    finally:
+        conn.close()
+
+
+@app.route("/api/chat/<username>/streams")
+def api_chat_streams(username):
+    username = normalize_username(username)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT stream_id,
+                   MIN(timestamp) AS started_at,
+                   MAX(timestamp) AS last_message_at,
+                   COUNT(*) AS message_count,
+                   COUNT(DISTINCT sender) AS unique_chatters
+            FROM chat_messages
+            WHERE username = ?
+            GROUP BY stream_id
+            ORDER BY MIN(timestamp) DESC
+            """,
+            (username,),
+        ).fetchall()
+        return jsonify([dict(r) for r in rows])
+    finally:
+        conn.close()
+
+
+@app.route("/api/chat/<username>", methods=["DELETE"])
+def api_chat_clear(username):
+    username = normalize_username(username)
+    stream_id = request.args.get("stream_id", None)
+    conn = get_db()
+    try:
+        if stream_id:
+            cur = conn.execute(
+                "DELETE FROM chat_messages WHERE username = ? AND stream_id = ?",
+                (username, stream_id),
+            )
+        else:
+            cur = conn.execute(
+                "DELETE FROM chat_messages WHERE username = ?",
+                (username,),
+            )
+        deleted = cur.rowcount
+        conn.commit()
+        return jsonify({"status": "cleared", "deleted": deleted, "username": username})
     finally:
         conn.close()
 

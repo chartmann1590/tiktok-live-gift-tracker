@@ -1,6 +1,6 @@
 # TikTok Live Gift Tracker
 
-Real-time gift tracking dashboard for TikTok live streams. Connects to public TikTok WebSockets (no API keys required) and tracks every gift sent during a livestream with persistent historical data.
+Real-time gift tracking and chat logging dashboard for TikTok live streams. Connects to public TikTok WebSockets (no API keys required) and tracks every gift and chat message sent during a livestream with persistent historical data.
 
 [![Live site — GitHub Pages](https://img.shields.io/badge/site-GitHub%20Pages-222?style=for-the-badge&logo=github&logoColor=white)](https://chartmann1590.github.io/tiktok-live-gift-tracker/)
 [![View on GitHub](https://img.shields.io/badge/code-GitHub-181717?style=for-the-badge&logo=github)](https://github.com/chartmann1590/tiktok-live-gift-tracker)
@@ -15,7 +15,7 @@ The images below use **synthetic labels and demo data only** (no real TikTok use
 
 ![Empty dashboard — add a channel to begin tracking](docs/images/readme-empty-state.png)
 
-![Live dashboard — gift feed, stream history, and top gifters](docs/images/readme-dashboard.png)
+![Live dashboard — gift feed, chat log, stream history, and top gifters](docs/images/readme-dashboard.png)
 
 ## Support & sponsor
 
@@ -31,10 +31,12 @@ This project is **MIT-licensed and free to self-host** — no paywalls, no API k
 ## Features
 
 - **Real-time gift tracking** — captures every gift the moment it's sent during a live stream
+- **Live chat logging** — captures all chat messages and emotes during a stream, stored permanently
+- **Chat history** — browse full chat logs for any past stream from the stream history panel
 - **Permanent storage** — all data saved to SQLite, survives container restarts
 - **Auto-reconnect** — automatically reconnects when a streamer goes live again
 - **Multi-streamer support** — track multiple users simultaneously
-- **Stream history** — browse every past stream with full gift breakdowns
+- **Stream history** — browse every past stream with full gift breakdowns and chat logs
 - **Top gifters leaderboard** — see who's donated the most across all time
 - **Dark mode dashboard** — clean Tailwind CSS UI with live status indicators
 - **One-command deploy** — Docker Compose with persistent volume
@@ -53,8 +55,8 @@ Open [http://localhost:5000](http://localhost:5000) and enter a TikTok username.
 
 1. Enter a TikTok `@username` in the search bar
 2. The app connects to that user's live stream via public WebSockets (using [TikTokLive](https://github.com/isaackogan/TikTokLive))
-3. Every gift event is captured, converted to USD (diamonds × $0.005), and saved to a local SQLite database
-4. The dashboard auto-refreshes every 3 seconds showing live gifts, earnings, and stream history
+3. Every gift event and chat message is captured, converted to USD (diamonds × $0.005), and saved to a local SQLite database
+4. The dashboard auto-refreshes every 3 seconds showing live gifts, chat messages, earnings, and stream history
 5. If the stream ends, the app automatically reconnects when the user goes live again
 6. Tracked users and all gift data persist across container restarts via a Docker volume
 
@@ -66,12 +68,12 @@ Flask (web server, main thread)
 ├── REST API endpoints for data queries
 │
 ├── Background Thread #1 (asyncio event loop)
-│   └── TikTokLiveClient("@user1") → GiftEvent → SQLite INSERT
+│   └── TikTokLiveClient("@user1") → GiftEvent + CommentEvent → SQLite INSERT
 │
 ├── Background Thread #2 (asyncio event loop)
-│   └── TikTokLiveClient("@user2") → GiftEvent → SQLite INSERT
+│   └── TikTokLiveClient("@user2") → GiftEvent + CommentEvent → SQLite INSERT
 │
-└── SQLite (WAL mode) — persistent gift history
+└── SQLite (WAL mode) — persistent gift + chat history
 ```
 
 **Gift streak handling:** TikTok gifts can be "streaked" (sent repeatedly). The app only records a gift when the streak ends to prevent double-counting.
@@ -89,6 +91,9 @@ Flask (web server, main thread)
 | `GET` | `/api/gifts/<user>` | Gift feed (all time or per-stream) |
 | `GET` | `/api/streams/<user>` | All recorded streams with aggregated stats |
 | `GET` | `/api/top-gifters/<user>` | Top gifters leaderboard |
+| `GET` | `/api/chat/<user>` | Chat messages (all or per-stream) |
+| `GET` | `/api/chat/<user>/streams` | Streams with chat log counts |
+| `DELETE` | `/api/chat/<user>` | Clear chat logs (all or per-stream) |
 
 ## Configuration
 

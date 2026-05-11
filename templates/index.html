@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TikTok Live Gift Tracker</title>
+    <title>TikTok Live Gift & Chat Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -42,7 +42,7 @@
                 <path d="M12 19V22" stroke="#fe2c55" stroke-width="2.5" stroke-linecap="round"/>
                 <path d="M8 22H16" stroke="#25f4ee" stroke-width="2.5" stroke-linecap="round"/>
             </svg>
-            <h1 class="text-2xl font-bold bg-gradient-to-r from-tiktok-cyan to-tiktok-pink bg-clip-text text-transparent">TikTok Live Gift Tracker</h1>
+            <h1 class="text-2xl font-bold bg-gradient-to-r from-tiktok-cyan to-tiktok-pink bg-clip-text text-transparent">TikTok Live Gift & Chat Tracker</h1>
         </header>
 
         <div class="flex gap-3 mb-5">
@@ -127,6 +127,18 @@
                             <p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>
                         </div>
                     </div>
+
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-base font-semibold">Chat Log <span class="text-gray-500 font-normal text-sm">(current stream)</span></h2>
+                            <button id="clearChatBtn" onclick="clearChat()" class="text-gray-600 hover:text-red-400 transition-colors" title="Clear chat logs">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
+                        </div>
+                        <div id="chatLog" class="scroll-area max-h-80 overflow-y-auto space-y-1">
+                            <p class="text-gray-500 text-center py-6 text-sm">No chat messages yet.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -192,6 +204,7 @@
             resetReconciler(document.getElementById('giftFeed'));
             resetReconciler(document.getElementById('streamsList'));
             resetReconciler(document.getElementById('giftersList'));
+            resetReconciler(document.getElementById('chatLog'));
             setText('selectedLabel', '@' + username);
             setText('streamEarnings', '$0.00');
             setText('streamGiftCount', '0 gifts this stream');
@@ -219,7 +232,7 @@
         }
 
         async function fetchAllData() {
-            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters()]);
+            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters(), fetchChat()]);
         }
 
         async function fetchEarnings() {
@@ -319,6 +332,84 @@
             try {
                 const resp = await fetch('/api/top-gifters/' + selectedUser);
                 renderTopGifters(await resp.json());
+            } catch (e) {}
+        }
+
+        async function fetchChat() {
+            if (!selectedUser || !currentStreamId) return;
+            try {
+                const resp = await fetch('/api/chat/' + selectedUser + '?stream_id=' + currentStreamId + '&limit=200');
+                renderChatLog(await resp.json());
+            } catch (e) {}
+        }
+
+        function renderChatLog(messages) {
+            const el = document.getElementById('chatLog');
+            const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            reconcileList(el, messages,
+                m => m.id,
+                m => buildChatMsg(m),
+                (n, m) => updateChatMsg(n, m),
+                '<p class="text-gray-500 text-center py-6 text-sm">No chat messages yet.</p>'
+            );
+            if (wasAtBottom) el.scrollTop = el.scrollHeight;
+        }
+
+        function buildChatMsg(m) {
+            const div = document.createElement('div');
+            div.className = 'flex items-start gap-2 px-2 py-1 rounded hover:bg-gray-800/40 text-sm';
+            const sender = m.sender_unique_id ? '@' + esc(m.sender_unique_id) : esc(m.sender);
+            div.innerHTML =
+                '<span class="text-tiktok-cyan font-medium flex-shrink-0">' + sender + '</span>'
+                + '<span class="text-gray-500 flex-shrink-0">' + esc(fmtTs(m.timestamp)) + '</span>'
+                + '<span class="text-gray-300 break-all">' + esc(m.message) + '</span>';
+            return div;
+        }
+
+        function updateChatMsg(node, m) {}
+
+        async function clearChat(streamId) {
+            let url = '/api/chat/' + selectedUser;
+            if (streamId) url += '?stream_id=' + streamId;
+            const label = streamId ? 'this stream\'s chat' : 'all chat logs';
+            if (!confirm('Delete ' + label + ' for @' + selectedUser + '?')) return;
+            try {
+                const resp = await fetch(url, { method: 'DELETE' });
+                const data = await resp.json();
+                showToast('Deleted ' + data.deleted + ' messages', 'success');
+                fetchChat();
+                fetchStreams();
+            } catch (e) {
+                showToast('Failed to clear chat', 'error');
+            }
+        }
+
+        async function toggleStreamChat(username, streamId, btn) {
+            const container = btn.closest('.bg-gray-800\\/40').querySelector('.stream-chat');
+            if (!container.classList.contains('hidden')) {
+                container.classList.add('hidden');
+                btn.textContent = 'View chat';
+                return;
+            }
+            btn.textContent = 'Hide chat';
+            container.classList.remove('hidden');
+            if (container.dataset.loaded === 'true') return;
+            try {
+                const resp = await fetch('/api/chat/' + username + '?stream_id=' + streamId + '&limit=500');
+                const messages = await resp.json();
+                if (messages.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500 text-sm py-2">No chat messages.</p>';
+                } else {
+                    container.innerHTML = '<div class="flex justify-end mb-1"><button onclick="clearChat(\'' + streamId + '\')" class="text-xs text-red-400 hover:underline">Clear this stream\'s chat</button></div>'
+                        + '<div class="scroll-area max-h-60 overflow-y-auto space-y-0.5">'
+                        + messages.map(m => '<div class="flex items-start gap-1.5 px-1.5 py-0.5 text-xs">'
+                        + '<span class="text-tiktok-cyan font-medium flex-shrink-0">' + (m.sender_unique_id ? '@' + esc(m.sender_unique_id) : esc(m.sender)) + '</span>'
+                        + '<span class="text-gray-600 flex-shrink-0">' + esc(fmtTs(m.timestamp)) + '</span>'
+                        + '<span class="text-gray-400 break-all">' + esc(m.message) + '</span>'
+                        + '</div>').join('')
+                        + '</div>';
+                }
+                container.dataset.loaded = 'true';
             } catch (e) {}
         }
 
@@ -512,11 +603,17 @@
                 + '<div class="stream-usd text-base font-bold text-tiktok-cyan"></div>'
                 + '<div class="stream-meta text-xs text-gray-500"></div>'
                 + '</div></div>'
-                + '<button class="stream-toggle text-xs text-tiktok-cyan hover:underline cursor-pointer mt-1.5">View gifts</button>'
-                + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>';
+                + '<div class="stream-btns flex items-center gap-3 mt-1.5">'
+                + '<button class="stream-toggle text-xs text-tiktok-cyan hover:underline cursor-pointer">View gifts</button>'
+                + '<button class="stream-chat-toggle text-xs text-purple-400 hover:underline cursor-pointer">View chat</button>'
+                + '</div>'
+                + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>'
+                + '<div class="stream-chat hidden mt-2"></div>';
             const btn = wrap.querySelector('.stream-toggle');
             const sid = s.stream_id;
             btn.addEventListener('click', () => toggleStreamGifts(selectedUser, sid, btn));
+            const chatBtn = wrap.querySelector('.stream-chat-toggle');
+            chatBtn.addEventListener('click', () => toggleStreamChat(selectedUser, sid, chatBtn));
             updateStream(wrap, s);
             return wrap;
         }
@@ -530,7 +627,7 @@
         }
 
         async function toggleStreamGifts(username, streamId, btn) {
-            const container = btn.nextElementSibling;
+            const container = btn.closest('.bg-gray-800\\/40').querySelector('.stream-gifts');
             if (!container.classList.contains('hidden')) {
                 container.classList.add('hidden');
                 btn.textContent = 'View gifts';
@@ -645,6 +742,7 @@
                 fetchEarnings();
                 fetchGifts();
                 fetchTopGifters();
+                fetchChat();
             }, 3000);
             // Slow tick: tracked bar + stream history (less volatile)
             trackedTimer = setInterval(() => {

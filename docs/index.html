@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TikTok Live Gift Tracker — real-time gift analytics for TikTok Live</title>
-    <meta name="description" content="Self-hosted TikTok Live gift tracker: real-time gifts, SQLite history, multi-streamer support, Docker one-command deploy. Open source, no API keys. Support the developer on Buy Me a Coffee.">
+    <meta name="description" content="Self-hosted TikTok Live gift tracker and chat logger: real-time gifts, chat logging, SQLite history, multi-streamer support, Docker one-command deploy. Open source, no API keys. Support the developer on Buy Me a Coffee.">
     <meta name="keywords" content="TikTok Live, gift tracker, TikTok gifts, livestream analytics, SQLite, Docker, Flask, open source, TikTokLive, self-hosted">
     <meta name="author" content="https://github.com/chartmann1590">
     <meta name="robots" content="index, follow">
@@ -32,7 +32,7 @@
       "operatingSystem": "Docker, Linux, macOS, Windows",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
       "license": "https://opensource.org/licenses/MIT",
-      "description": "Self-hosted dashboard that captures TikTok Live gifts in real time with SQLite storage and REST API.",
+      "description": "Self-hosted dashboard that captures TikTok Live gifts and chat messages in real time with SQLite storage and REST API.",
       "url": "https://chartmann1590.github.io/tiktok-live-gift-tracker/",
       "codeRepository": "https://github.com/chartmann1590/tiktok-live-gift-tracker",
       "author": { "@type": "Person", "name": "chartmann1590", "url": "https://github.com/chartmann1590" }
@@ -117,10 +117,10 @@
                 Open source &bull; No API keys required &bull; One-command deploy
             </div>
             <h1 class="text-5xl md:text-6xl font-extrabold mb-5 leading-tight">
-                Track TikTok Live<br><span class="gradient-text">Gifts in Real Time</span>
+                Track TikTok Live<br><span class="gradient-text">Gifts & Chat in Real Time</span>
             </h1>
             <p class="text-xl text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-                A self-hosted dashboard that captures every gift sent during a TikTok livestream.
+                A self-hosted dashboard that captures every gift and chat message sent during a TikTok livestream.
                 Persistent SQLite storage, auto-reconnect, multi-streamer support, and full historical data.
             </p>
             <div class="flex flex-wrap items-center justify-center gap-4">
@@ -153,7 +153,7 @@
                 </figure>
                 <figure class="rounded-xl overflow-hidden border border-gray-800 bg-gray-900/50">
                     <img src="images/readme-dashboard.png" alt="Dashboard with gift feed, stream history, and top gifters" class="w-full h-auto block" loading="lazy" decoding="async">
-                    <figcaption class="px-4 py-3 text-sm text-gray-400 border-t border-gray-800">Gift feed, history, and leaderboard</figcaption>
+                    <figcaption class="px-4 py-3 text-sm text-gray-400 border-t border-gray-800">Gift feed, chat log, history, and leaderboard</figcaption>
                 </figure>
             </div>
         </div>
@@ -197,6 +197,13 @@
                     </div>
                     <h3 class="font-semibold text-lg mb-2">Top Gifters</h3>
                     <p class="text-gray-400 text-sm leading-relaxed">All-time leaderboard showing who donated the most, with gift counts, diamond totals, and visual progress bars.</p>
+                </div>
+                <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center mb-4">
+                        <svg class="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                    </div>
+                    <h3 class="font-semibold text-lg mb-2">Live Chat Logging</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Captures all chat messages and emotes during a stream. Browse full chat logs for any past stream, with deduplication and clear controls.</p>
                 </div>
                 <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
                     <div class="w-10 h-10 rounded-lg bg-tiktok-cyan/10 flex items-center justify-center mb-4">
@@ -297,6 +304,16 @@ cd tiktok-live-gift-tracker</code></pre>
                     <code class="text-sm text-gray-300">/api/top-gifters/&lt;user&gt;</code>
                     <span class="text-gray-600 ml-auto text-sm">Top gifters leaderboard</span>
                 </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400">GET</span>
+                    <code class="text-sm text-gray-300">/api/chat/&lt;user&gt;</code>
+                    <span class="text-gray-600 ml-auto text-sm">Chat messages (all or per-stream)</span>
+                </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400">DELETE</span>
+                    <code class="text-sm text-gray-300">/api/chat/&lt;user&gt;</code>
+                    <span class="text-gray-600 ml-auto text-sm">Clear chat logs</span>
+                </div>
             </div>
         </div>
     </section>
@@ -340,12 +357,12 @@ cd tiktok-live-gift-tracker</code></pre>
 ├── REST API endpoints for data queries
 │
 ├── Background <span class="text-yellow-400">Thread #1</span> (asyncio event loop)
-│   └── TikTokLiveClient("@user1") → GiftEvent → SQLite INSERT
+│   └── TikTokLiveClient("@user1") → <span class="text-tiktok-cyan">GiftEvent</span> + <span class="text-indigo-400">CommentEvent</span> → SQLite INSERT
 │
 ├── Background <span class="text-yellow-400">Thread #2</span> (asyncio event loop)
-│   └── TikTokLiveClient("@user2") → GiftEvent → SQLite INSERT
+│   └── TikTokLiveClient("@user2") → <span class="text-tiktok-cyan">GiftEvent</span> + <span class="text-indigo-400">CommentEvent</span> → SQLite INSERT
 │
-└── <span class="text-green-400">SQLite</span> (WAL mode) — persistent gift history</code></pre>
+└── <span class="text-green-400">SQLite</span> (WAL mode) — persistent gift + chat history</code></pre>
             </div>
         </div>
     </section>
@@ -363,8 +380,7 @@ cd tiktok-live-gift-tracker</code></pre>
                 <a href="https://github.com/chartmann1590/tiktok-live-gift-tracker" class="hover:text-white transition-colors">GitHub</a>
                 <a href="#sponsor" class="text-amber-300/90 hover:text-amber-200 transition-colors">Coffee</a>
                 <span>MIT License</span>
-                <span>Built with Flask + TikTokLive + SQLite</span>
-            </div>
+                <span>Built with Flask + TikTokLive + SQLite</span>            </div>
         </div>
     </footer>
 
