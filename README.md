@@ -13,11 +13,11 @@ Real-time gift tracking dashboard for TikTok live streams. Connects to public Ti
 
 This project is **MIT-licensed and free to self-host** — no paywalls, no API keys, no tracking. If it helps your stream, your agency, or your workflow, **consider sponsoring** so I can keep improving reliability, docs, and features.
 
-[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/chartmann1590)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/charleshartmann)
 
-**Why sponsor?** Your support pays for time on bug fixes, compatibility when TikTok changes behavior, better dashboards, and keeping the docs site (above) up to date. Even a small monthly amount helps a lot — thank you.
+**Why donate?** Your support pays for time on bug fixes, compatibility when TikTok changes behavior, better dashboards, and keeping the docs site (above) up to date. A coffee’s worth goes a long way — thank you.
 
-- **GitHub Sponsors:** [github.com/sponsors/chartmann1590](https://github.com/sponsors/chartmann1590) (recurring or one-time)
+- **Buy Me a Coffee:** [buymeacoffee.com/charleshartmann](https://buymeacoffee.com/charleshartmann)
 - **Project site (docs & overview):** [chartmann1590.github.io/tiktok-live-gift-tracker](https://chartmann1590.github.io/tiktok-live-gift-tracker/)
 
 ## Features
