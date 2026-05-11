@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 
 from flask import Flask, render_template, request, jsonify
 
+from money import diamonds_to_usd, index_gift_catalog, resolve_diamonds_per_unit
+
 from TikTokLive import TikTokLiveClient
 from TikTokLive.events import (
     GiftEvent,
@@ -16,7 +18,9 @@ from TikTokLive.events import (
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.path.abspath(
+    os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
+)
 DB_PATH = os.path.join(DATA_DIR, "gifts.db")
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -140,6 +144,7 @@ async def _run_listener(username: str):
         client = TikTokLiveClient(unique_id=f"@{username}")
         connected = asyncio.Event()
         stream_id_holder = [None]
+        gift_catalog: dict[int, int] = {}
 
         @client.on(ConnectEvent)
         async def on_connect(event: ConnectEvent):
@@ -174,8 +179,14 @@ async def _run_listener(username: str):
             if gift.streakable and event.streaking:
                 return
 
-            diamonds = gift.diamond_count * event.repeat_count
-            usd = diamonds * 0.005
+            per_unit = resolve_diamonds_per_unit(
+                int(gift.id),
+                gift.name or "",
+                int(gift.diamond_count),
+                gift_catalog,
+            )
+            diamonds = per_unit * int(event.repeat_count)
+            usd = diamonds_to_usd(diamonds)
             sid = stream_id_holder[0] or "unknown"
 
             _insert_gift(
@@ -189,6 +200,8 @@ async def _run_listener(username: str):
 
         try:
             task = await client.start(fetch_gift_info=True)
+            gift_catalog.clear()
+            gift_catalog.update(index_gift_catalog(client.gift_info))
 
             try:
                 await asyncio.wait_for(connected.wait(), timeout=20)
@@ -371,17 +384,22 @@ def api_earnings(username):
                 "SELECT COUNT(*) AS cnt FROM gifts WHERE username = ? AND stream_id = ?",
                 (username, stream_id),
             ).fetchone()["cnt"]
+
+            row_hist = conn.execute(
+                "SELECT COALESCE(SUM(usd_value), 0) AS past_total FROM gifts WHERE username = ? AND stream_id != ?",
+                (username, stream_id),
+            ).fetchone()
+            historical_earnings = round(row_hist["past_total"], 2)
         else:
             stream_earnings = 0.0
             stream_count = 0
+            historical_earnings = total_earnings
 
         stream_row = conn.execute(
             "SELECT COUNT(DISTINCT stream_id) AS cnt FROM gifts WHERE username = ?",
             (username,),
         ).fetchone()
         total_streams = stream_row["cnt"]
-
-        historical_earnings = round(total_earnings - stream_earnings, 2)
         historical_gift_count = gift_count - stream_count
 
         return jsonify(
@@ -427,7 +445,7 @@ def api_gifts(username):
                 "sender": r["sender"],
                 "gift_name": r["gift_name"],
                 "diamond_value": r["diamond_value"],
-                "usd_value": r["usd_value"],
+                "usd_value": round(float(r["usd_value"]), 2),
                 "timestamp": r["timestamp"],
             }
             if not stream_id:

@@ -72,12 +72,15 @@ Flask (web server, main thread)
 
 ### Persistent Storage
 
-The `docker-compose.yml` maps `./data:/app/data` so your SQLite database survives container updates:
+Compose uses a **named volume** (`tiktok_monitor_data` → `/app/data`) for SQLite (`gifts.db` and WAL files). That data lives in Docker’s volume store, not in the image layer, so `docker compose build --no-cache` and image rebuilds do not erase it.
 
-```yaml
-volumes:
-  - ./data:/app/data
-```
+To bind-mount a host folder instead (e.g. easy backups), replace the service `volumes` entry with `- ./data:/app/data` and keep `DATA_DIR=/app/data`.
+
+**Do not** use `docker compose down -v` unless you intend to delete the named volume and its database.
+
+If you already have a local `./data` folder from an older compose file, either switch the compose volume back to `- ./data:/app/data` or copy your `gifts.db*` files into the named volume before relying on it.
+
+**Repairing gift totals:** Run `python scripts/repair_gift_rows.py` (optional `--db` / `--dry-run`) to recompute `diamond_value` and `usd_value` from SQLite + `gift_diamond_rates.json` without TikTok; see `money.repair_row_diamonds_usd` for legacy-row limits.
 
 ### Auto-Reconnect
 

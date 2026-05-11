@@ -54,7 +54,7 @@
             <button onclick="trackUser()" class="px-6 py-3 bg-gradient-to-r from-tiktok-pink to-pink-600 hover:from-pink-600 hover:to-tiktok-pink text-white font-semibold rounded-lg transition-all duration-200 active:scale-95">Track</button>
         </div>
 
-        <div id="trackedBar" class="mb-5"></div>
+        <div id="trackedBar" class="mb-5 flex flex-wrap gap-2 hidden"></div>
 
         <div id="emptyState" class="flex flex-col items-center justify-center py-24 text-gray-500">
             <svg class="w-16 h-16 mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -98,7 +98,7 @@
                     <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
                         <div class="flex items-center justify-between mb-3">
                             <h2 class="text-base font-semibold">Gift Feed <span class="text-gray-500 font-normal text-sm">(all time)</span></h2>
-                            <select id="feedFilter" onchange="fetchGifts()" class="bg-gray-800 border border-gray-700 text-sm rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-tiktok-cyan">
+                            <select id="feedFilter" class="bg-gray-800 border border-gray-700 text-sm rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-tiktok-cyan">
                                 <option value="all">All Streams</option>
                                 <option value="current">Current Stream Only</option>
                             </select>
@@ -132,12 +132,19 @@
 
     <script>
         let selectedUser = null;
-        let lastGiftId = 0;
         let pollTimer = null;
         let trackedTimer = null;
+        let currentStreamId = null;
+        let lastFeedFilter = 'all';
 
         document.getElementById('usernameInput').addEventListener('keydown', e => {
             if (e.key === 'Enter') trackUser();
+        });
+
+        document.getElementById('feedFilter').addEventListener('change', () => {
+            // Filter swap = different dataset; clear feed before refetch.
+            resetReconciler(document.getElementById('giftFeed'));
+            fetchGifts();
         });
 
         async function trackUser() {
@@ -169,10 +176,26 @@
         }
 
         function selectUser(username) {
+            if (selectedUser === username) {
+                showDashboard(true);
+                refreshTracked();
+                return;
+            }
             selectedUser = username;
-            lastGiftId = 0;
+            currentStreamId = null;
+            // Different user => different dataset. Clear panel reconcilers
+            // so we don't keep stale rows from the previous user.
+            resetReconciler(document.getElementById('giftFeed'));
+            resetReconciler(document.getElementById('streamsList'));
+            resetReconciler(document.getElementById('giftersList'));
+            setText('selectedLabel', '@' + username);
+            setText('streamEarnings', '$0.00');
+            setText('streamGiftCount', '0 gifts this stream');
+            setText('historicalEarnings', '$0.00');
+            setText('historicalInfo', '0 gifts from 0 past streams');
+            setText('totalEarnings', '$0.00');
+            setText('totalGiftCount', '0 gifts across 0 streams');
             showDashboard(true);
-            document.getElementById('selectedLabel').textContent = '@' + username;
             fetchAllData();
             refreshTracked();
         }
@@ -187,28 +210,12 @@
                 const resp = await fetch('/api/tracked');
                 const users = await resp.json();
                 renderTrackedBar(users);
-                if (selectedUser && !show) showDashboard(true);
+                if (selectedUser) showDashboard(true);
             } catch (e) {}
         }
 
-        function renderTrackedBar(users) {
-            const bar = document.getElementById('trackedBar');
-            if (!users || users.length === 0) { bar.innerHTML = ''; return; }
-            bar.innerHTML = '<div class="flex flex-wrap gap-2">' + users.map(u => {
-                const sel = u.username === selectedUser;
-                const dot = u.live
-                    ? '<span class="w-2.5 h-2.5 rounded-full bg-green-400 live-badge flex-shrink-0"></span>'
-                    : '<span class="w-2.5 h-2.5 rounded-full bg-gray-600 flex-shrink-0"></span>';
-                return '<div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 border ' + (sel ? 'border-tiktok-cyan' : 'border-gray-800') + ' cursor-pointer hover:border-gray-600 transition-colors min-w-[150px]" onclick="selectUser(\'' + u.username + '\')">'
-                    + dot
-                    + '<div class="flex-1 min-w-0"><div class="text-sm font-medium truncate">' + u.username + '</div><div class="text-xs text-gray-500">$' + u.total_earnings.toFixed(2) + ' &middot; ' + u.total_gifts + ' gifts</div></div>'
-                    + '<button onclick="event.stopPropagation(); stopTracking(\'' + u.username + '\')" class="text-gray-600 hover:text-red-400 transition-colors flex-shrink-0"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
-                    + '</div>';
-            }).join('') + '</div>';
-        }
-
         async function fetchAllData() {
-            await Promise.all([fetchEarnings(), fetchGifts(), fetchStatus(), fetchStreams(), fetchTopGifters()]);
+            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters()]);
         }
 
         async function fetchEarnings() {
@@ -216,12 +223,12 @@
             try {
                 const resp = await fetch('/api/earnings/' + selectedUser);
                 const d = await resp.json();
-                document.getElementById('streamEarnings').textContent = '$' + d.stream_earnings.toFixed(2);
-                document.getElementById('streamGiftCount').textContent = d.stream_gift_count + ' gifts this stream';
-                document.getElementById('historicalEarnings').textContent = '$' + d.historical_earnings.toFixed(2);
-                document.getElementById('historicalInfo').textContent = d.historical_gift_count + ' gifts from ' + (d.total_streams - (d.stream_earnings > 0 ? 1 : 0)) + ' past streams';
-                document.getElementById('totalEarnings').textContent = '$' + d.total_earnings.toFixed(2);
-                document.getElementById('totalGiftCount').textContent = d.total_gift_count + ' gifts across ' + d.total_streams + ' streams';
+                setText('streamEarnings', '$' + d.stream_earnings.toFixed(2));
+                setText('streamGiftCount', d.stream_gift_count + ' gifts this stream');
+                setText('historicalEarnings', '$' + d.historical_earnings.toFixed(2));
+                setText('historicalInfo', d.historical_gift_count + ' gifts from ' + (d.total_streams - (d.stream_earnings > 0 ? 1 : 0)) + ' past streams');
+                setText('totalEarnings', '$' + d.total_earnings.toFixed(2));
+                setText('totalGiftCount', d.total_gift_count + ' gifts across ' + d.total_streams + ' streams');
             } catch (e) {}
         }
 
@@ -229,15 +236,15 @@
             if (!selectedUser) return;
             try {
                 const filter = document.getElementById('feedFilter').value;
-                let url = '/api/gifts/' + selectedUser + '?limit=100';
-                if (filter === 'current') {
-                    const statusResp = await fetch('/api/status/' + selectedUser);
-                    const status = await statusResp.json();
-                    if (status.stream_id) url += '&stream_id=' + status.stream_id;
+                if (filter !== lastFeedFilter) {
+                    resetReconciler(document.getElementById('giftFeed'));
+                    lastFeedFilter = filter;
                 }
+                let url = '/api/gifts/' + selectedUser + '?limit=100';
+                // Reuse stream_id cached by fetchStatus to avoid an extra round-trip.
+                if (filter === 'current' && currentStreamId) url += '&stream_id=' + currentStreamId;
                 const resp = await fetch(url);
-                const gifts = await resp.json();
-                renderGiftFeed(gifts);
+                renderGiftFeed(await resp.json());
             } catch (e) {}
         }
 
@@ -246,37 +253,47 @@
             try {
                 const resp = await fetch('/api/status/' + selectedUser);
                 const d = await resp.json();
-                const badge = document.getElementById('statusBadge');
-                const status = document.getElementById('streamStatus');
-                const since = document.getElementById('connectedSince');
-                if (d.status === 'live') {
-                    badge.textContent = 'LIVE';
-                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-green-500/20 text-green-400 live-badge';
-                    status.textContent = 'Live';
-                    status.className = 'text-2xl font-bold text-green-400';
-                    since.textContent = d.connected_at ? 'Since ' + new Date(d.connected_at).toLocaleTimeString() : '';
-                } else if (d.status === 'offline') {
-                    badge.textContent = 'OFFLINE \u2013 RECONNECTING';
-                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-yellow-500/20 text-yellow-400';
-                    status.textContent = 'Reconnecting...';
-                    status.className = 'text-2xl font-bold text-yellow-400';
-                    since.textContent = 'Auto-reconnect enabled';
-                } else {
-                    badge.textContent = 'NOT TRACKED';
-                    badge.className = 'px-3 py-1 text-sm font-medium rounded-full bg-gray-700 text-gray-400';
-                    status.textContent = '--';
-                    status.className = 'text-2xl font-bold text-gray-500';
-                    since.textContent = '';
-                }
+                currentStreamId = d.stream_id || null;
+                applyStatus(d);
             } catch (e) {}
+        }
+
+        function applyStatus(d) {
+            const badge = document.getElementById('statusBadge');
+            const status = document.getElementById('streamStatus');
+            const since = document.getElementById('connectedSince');
+            let badgeText, badgeClass, statusText, statusClass, sinceText;
+            if (d.status === 'live') {
+                badgeText = 'LIVE';
+                badgeClass = 'px-3 py-1 text-sm font-medium rounded-full bg-green-500/20 text-green-400 live-badge';
+                statusText = 'Live';
+                statusClass = 'text-2xl font-bold text-green-400';
+                sinceText = d.connected_at ? 'Since ' + new Date(d.connected_at).toLocaleTimeString() : '';
+            } else if (d.status === 'offline') {
+                badgeText = 'OFFLINE \u2013 RECONNECTING';
+                badgeClass = 'px-3 py-1 text-sm font-medium rounded-full bg-yellow-500/20 text-yellow-400';
+                statusText = 'Reconnecting...';
+                statusClass = 'text-2xl font-bold text-yellow-400';
+                sinceText = 'Auto-reconnect enabled';
+            } else {
+                badgeText = 'NOT TRACKED';
+                badgeClass = 'px-3 py-1 text-sm font-medium rounded-full bg-gray-700 text-gray-400';
+                statusText = '--';
+                statusClass = 'text-2xl font-bold text-gray-500';
+                sinceText = '';
+            }
+            if (badge.textContent !== badgeText) badge.textContent = badgeText;
+            if (badge.className !== badgeClass) badge.className = badgeClass;
+            if (status.textContent !== statusText) status.textContent = statusText;
+            if (status.className !== statusClass) status.className = statusClass;
+            if (since.textContent !== sinceText) since.textContent = sinceText;
         }
 
         async function fetchStreams() {
             if (!selectedUser) return;
             try {
                 const resp = await fetch('/api/streams/' + selectedUser);
-                const streams = await resp.json();
-                renderStreams(streams);
+                renderStreams(await resp.json());
             } catch (e) {}
         }
 
@@ -284,60 +301,204 @@
             if (!selectedUser) return;
             try {
                 const resp = await fetch('/api/top-gifters/' + selectedUser);
-                const gifters = await resp.json();
-                renderTopGifters(gifters);
+                renderTopGifters(await resp.json());
             } catch (e) {}
         }
 
-        function renderGiftFeed(gifts) {
-            const feed = document.getElementById('giftFeed');
-            if (!gifts || gifts.length === 0) {
-                feed.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No gifts recorded yet.</p>';
+        // ---------- Tiny keyed DOM reconciler ----------
+        // Reuses existing nodes by stable key, only updates changed fields,
+        // reorders in place via insertBefore. Empty placeholder is swapped
+        // in/out only on transitions, never on every poll. This is what
+        // prevents the panel-flash and preserves expanded/collapsed state.
+        function reconcileList(container, items, keyFn, buildFn, updateFn, emptyHtml) {
+            if (!container._kidMap) container._kidMap = new Map();
+            const map = container._kidMap;
+
+            if (!items || items.length === 0) {
+                if (map.size > 0 || container._reset) {
+                    map.clear();
+                    container.innerHTML = emptyHtml || '';
+                    container._reset = false;
+                } else if (container.innerHTML === '' && emptyHtml) {
+                    container.innerHTML = emptyHtml;
+                }
                 return;
             }
+
+            // Coming from empty placeholder -> wipe placeholder once.
+            if (map.size === 0 && container.innerHTML !== '') container.innerHTML = '';
+            container._reset = false;
+
+            const seen = new Set();
+            let prev = null;
+            for (const item of items) {
+                const k = keyFn(item);
+                seen.add(k);
+                let node = map.get(k);
+                if (!node) {
+                    node = buildFn(item);
+                    map.set(k, node);
+                } else {
+                    updateFn(node, item);
+                }
+                const refNode = prev ? prev.nextSibling : container.firstChild;
+                if (node !== refNode) container.insertBefore(node, refNode);
+                prev = node;
+            }
+            for (const [k, node] of [...map]) {
+                if (!seen.has(k)) { node.remove(); map.delete(k); }
+            }
+        }
+
+        function resetReconciler(container) {
+            if (!container) return;
+            if (container._kidMap) container._kidMap.clear();
+            container.innerHTML = '';
+            container._reset = true;
+        }
+
+        function setText(id, v) {
+            const el = document.getElementById(id);
+            if (el && el.textContent !== v) el.textContent = v;
+        }
+
+        function setNodeText(node, sel, v) {
+            const e = node.querySelector(sel);
+            if (e && e.textContent !== v) e.textContent = v;
+        }
+
+        // ---------- Tracked bar ----------
+        function renderTrackedBar(users) {
+            const bar = document.getElementById('trackedBar');
+            if (!users || users.length === 0) {
+                resetReconciler(bar);
+                bar.classList.add('hidden');
+                return;
+            }
+            bar.classList.remove('hidden');
+            reconcileList(bar, users,
+                u => u.username,
+                u => buildTrackedItem(u),
+                (n, u) => updateTrackedItem(n, u)
+            );
+        }
+
+        function buildTrackedItem(u) {
+            const wrap = document.createElement('div');
+            wrap.className = 'flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 border cursor-pointer hover:border-gray-600 transition-colors min-w-[150px]';
+            wrap.innerHTML =
+                '<span class="t-dot w-2.5 h-2.5 rounded-full flex-shrink-0"></span>'
+                + '<div class="flex-1 min-w-0"><div class="t-name text-sm font-medium truncate"></div><div class="t-meta text-xs text-gray-500"></div></div>'
+                + '<button class="t-close text-gray-600 hover:text-red-400 transition-colors flex-shrink-0" title="Stop tracking"><svg class="w-4 h-4 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+            wrap.querySelector('.t-name').textContent = u.username;
+            wrap.addEventListener('click', () => selectUser(u.username));
+            wrap.querySelector('.t-close').addEventListener('click', e => {
+                e.stopPropagation();
+                stopTracking(u.username);
+            });
+            updateTrackedItem(wrap, u);
+            return wrap;
+        }
+
+        function updateTrackedItem(node, u) {
+            const isSel = u.username === selectedUser;
+            node.classList.toggle('border-tiktok-cyan', isSel);
+            node.classList.toggle('border-gray-800', !isSel);
+            const dot = node.querySelector('.t-dot');
+            dot.classList.toggle('bg-green-400', !!u.live);
+            dot.classList.toggle('live-badge', !!u.live);
+            dot.classList.toggle('bg-gray-600', !u.live);
+            setNodeText(node, '.t-meta', '$' + u.total_earnings.toFixed(2) + ' \u00B7 ' + u.total_gifts + ' gifts');
+        }
+
+        // ---------- Gift feed ----------
+        function renderGiftFeed(gifts) {
+            const feed = document.getElementById('giftFeed');
             const wasAtBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
-            feed.innerHTML = gifts.map(g => {
-                const isNew = g.id > lastGiftId;
-                return '<div class="gift-item flex items-center justify-between px-2.5 py-2 rounded-lg ' + (isNew ? 'bg-gray-800/80' : 'bg-gray-800/40') + '">'
-                    + '<div class="flex items-center gap-2 min-w-0">'
-                    + '<div class="w-7 h-7 rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center text-[10px] font-bold flex-shrink-0">' + g.sender.charAt(0).toUpperCase() + '</div>'
-                    + '<div class="min-w-0">'
-                    + '<span class="font-medium text-sm">' + esc(g.sender) + '</span>'
-                    + '<span class="text-gray-500 text-sm"> \u2192 </span>'
-                    + '<span class="text-tiktok-cyan text-sm font-medium">' + esc(g.gift_name) + '</span>'
-                    + '</div></div>'
-                    + '<div class="text-right flex-shrink-0 ml-2">'
-                    + '<span class="text-sm font-medium">' + g.diamond_value + '\u{1F48E}</span>'
-                    + '<span class="text-gray-500 text-xs ml-2">' + fmtTs(g.timestamp) + '</span>'
-                    + '</div></div>';
-            }).join('');
-            lastGiftId = Math.max(lastGiftId, gifts[0].id);
+            reconcileList(feed, gifts,
+                g => g.id,
+                g => buildGiftItem(g),
+                (n, g) => updateGiftItem(n, g),
+                '<p class="text-gray-500 text-center py-6 text-sm">No gifts recorded yet.</p>'
+            );
             if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
         }
 
+        function buildGiftItem(g) {
+            // Newly built nodes are highlighted; first update() demotes them.
+            const div = document.createElement('div');
+            div.className = 'gift-item flex items-center justify-between px-2.5 py-2 rounded-lg bg-gray-800/80';
+            div.innerHTML =
+                '<div class="flex items-center gap-2 min-w-0">'
+                + '<div class="w-7 h-7 rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center text-[10px] font-bold flex-shrink-0">' + esc(g.sender.charAt(0).toUpperCase()) + '</div>'
+                + '<div class="min-w-0">'
+                + '<span class="font-medium text-sm">' + esc(g.sender) + '</span>'
+                + '<span class="text-gray-500 text-sm"> \u2192 </span>'
+                + '<span class="text-tiktok-cyan text-sm font-medium">' + esc(g.gift_name) + '</span>'
+                + '</div></div>'
+                + '<div class="text-right flex-shrink-0 ml-2">'
+                + '<span class="text-sm font-medium text-amber-200">$' + Number(g.usd_value).toFixed(2) + '</span>'
+                + '<span class="text-gray-500 text-xs mx-1">\u00B7</span>'
+                + '<span class="text-sm font-medium">' + g.diamond_value + '\u{1F48E}</span>'
+                + '<span class="text-gray-500 text-xs ml-2">' + esc(fmtTs(g.timestamp)) + '</span>'
+                + '</div>';
+            return div;
+        }
+
+        function updateGiftItem(node, _g) {
+            // After first cycle the gift is no longer "new"; tone down once.
+            if (node.classList.contains('bg-gray-800/80')) {
+                node.classList.remove('bg-gray-800/80');
+                node.classList.add('bg-gray-800/40');
+            }
+        }
+
+        // ---------- Streams (preserves expanded "View gifts" sections) ----------
         function renderStreams(streams) {
             const el = document.getElementById('streamsList');
-            if (!streams || streams.length === 0) {
-                el.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No stream history yet.</p>';
-                return;
+            reconcileList(el, streams,
+                s => s.stream_id,
+                s => buildStream(s),
+                (n, s) => updateStream(n, s),
+                '<p class="text-gray-500 text-center py-6 text-sm">No stream history yet.</p>'
+            );
+            // Rank label depends on current ordering; re-apply after reconcile.
+            if (streams && streams.length > 0 && el._kidMap) {
+                streams.forEach((s, i) => {
+                    const node = el._kidMap.get(s.stream_id);
+                    if (node) setNodeText(node, '.stream-rank', 'Stream #' + (streams.length - i));
+                });
             }
-            el.innerHTML = streams.map((s, i) => {
-                const start = s.started_at ? new Date(s.started_at).toLocaleString() : 'Unknown';
-                const last = s.last_gift_at ? new Date(s.last_gift_at).toLocaleTimeString() : '';
-                return '<div class="bg-gray-800/40 rounded-lg p-3 border border-gray-700/40">'
-                    + '<div class="flex items-center justify-between gap-2">'
-                    + '<div class="min-w-0">'
-                    + '<div class="text-sm font-semibold text-gray-200">Stream #' + (streams.length - i) + ' <span class="text-gray-600 font-normal text-xs ml-1">' + s.stream_id.substring(0, 12) + '...</span></div>'
-                    + '<div class="text-xs text-gray-500">' + start + (last ? ' \u2013 ' + last : '') + '</div>'
-                    + '</div>'
-                    + '<div class="text-right flex-shrink-0">'
-                    + '<div class="text-base font-bold text-tiktok-cyan">$' + s.total_usd + '</div>'
-                    + '<div class="text-xs text-gray-500">' + s.gift_count + ' gifts &middot; ' + s.unique_senders + ' senders</div>'
-                    + '</div></div>'
-                    + '<button onclick="toggleStreamGifts(\'' + selectedUser + '\',\'' + s.stream_id + '\',this)" class="text-xs text-tiktok-cyan hover:underline cursor-pointer mt-1.5">View gifts</button>'
-                    + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>'
-                    + '</div>';
-            }).join('');
+        }
+
+        function buildStream(s) {
+            const wrap = document.createElement('div');
+            wrap.className = 'bg-gray-800/40 rounded-lg p-3 border border-gray-700/40';
+            wrap.innerHTML =
+                '<div class="flex items-center justify-between gap-2">'
+                + '<div class="min-w-0">'
+                + '<div class="text-sm font-semibold text-gray-200"><span class="stream-rank"></span> <span class="text-gray-600 font-normal text-xs ml-1">' + esc(s.stream_id.substring(0, 12)) + '...</span></div>'
+                + '<div class="stream-time text-xs text-gray-500"></div>'
+                + '</div>'
+                + '<div class="text-right flex-shrink-0">'
+                + '<div class="stream-usd text-base font-bold text-tiktok-cyan"></div>'
+                + '<div class="stream-meta text-xs text-gray-500"></div>'
+                + '</div></div>'
+                + '<button class="stream-toggle text-xs text-tiktok-cyan hover:underline cursor-pointer mt-1.5">View gifts</button>'
+                + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>';
+            const btn = wrap.querySelector('.stream-toggle');
+            const sid = s.stream_id;
+            btn.addEventListener('click', () => toggleStreamGifts(selectedUser, sid, btn));
+            updateStream(wrap, s);
+            return wrap;
+        }
+
+        function updateStream(node, s) {
+            const start = s.started_at ? new Date(s.started_at).toLocaleString() : 'Unknown';
+            const last = s.last_gift_at ? new Date(s.last_gift_at).toLocaleTimeString() : '';
+            setNodeText(node, '.stream-time', start + (last ? ' \u2013 ' + last : ''));
+            setNodeText(node, '.stream-usd', '$' + s.total_usd);
+            setNodeText(node, '.stream-meta', s.gift_count + ' gifts \u00B7 ' + s.unique_senders + ' senders');
         }
 
         async function toggleStreamGifts(username, streamId, btn) {
@@ -362,41 +523,71 @@
                         + '<span class="text-tiktok-cyan">' + esc(g.gift_name) + '</span>'
                         + '</div>'
                         + '<div class="flex items-center gap-2 flex-shrink-0">'
+                        + '<span class="text-amber-200/90">$' + Number(g.usd_value).toFixed(2) + '</span>'
                         + '<span class="text-gray-400">' + g.diamond_value + '\u{1F48E}</span>'
-                        + '<span class="text-gray-600">' + fmtTs(g.timestamp) + '</span>'
+                        + '<span class="text-gray-600">' + esc(fmtTs(g.timestamp)) + '</span>'
                         + '</div></div>').join('');
                 container.dataset.loaded = 'true';
             } catch (e) {}
         }
 
+        // ---------- Top gifters ----------
         function renderTopGifters(gifters) {
             const el = document.getElementById('giftersList');
-            if (!gifters || gifters.length === 0) {
-                el.innerHTML = '<p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>';
-                return;
+            const topUsd = (gifters && gifters[0]) ? (gifters[0].total_usd || 1) : 1;
+            reconcileList(el, gifters,
+                g => g.sender,
+                g => buildGifter(g, topUsd),
+                (n, g) => updateGifter(n, g, topUsd),
+                '<p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>'
+            );
+            // Medal/rank depends on order; re-apply after reconcile.
+            if (gifters && gifters.length > 0 && el._kidMap) {
+                gifters.forEach((g, i) => {
+                    const node = el._kidMap.get(g.sender);
+                    if (!node) return;
+                    const medalEl = node.querySelector('.gifter-medal');
+                    const medal = i === 0 ? '\u{1F947}' : i === 1 ? '\u{1F948}' : i === 2 ? '\u{1F949}' : String(i + 1);
+                    if (medalEl.textContent !== medal) medalEl.textContent = medal;
+                    medalEl.classList.toggle('text-gray-600', i >= 3);
+                    medalEl.classList.toggle('text-xs', i >= 3);
+                    medalEl.classList.toggle('text-sm', i < 3);
+                });
             }
-            const topUsd = gifters[0].total_usd || 1;
-            el.innerHTML = gifters.map((g, i) => {
-                const medal = i === 0 ? '\u{1F947}' : i === 1 ? '\u{1F948}' : i === 2 ? '\u{1F949}' : '<span class="text-gray-600 text-xs">' + (i + 1) + '</span>';
-                const pct = Math.max(5, (g.total_usd / topUsd) * 100);
-                return '<div class="flex items-center gap-2 px-2 py-2 rounded-lg bg-gray-800/30">'
-                    + '<div class="w-6 text-center text-sm">' + medal + '</div>'
-                    + '<div class="flex-1 min-w-0">'
-                    + '<div class="flex items-center justify-between mb-0.5">'
-                    + '<span class="font-medium text-sm truncate">' + esc(g.sender) + '</span>'
-                    + '<span class="text-sm font-bold text-tiktok-cyan ml-1">$' + g.total_usd + '</span>'
-                    + '</div>'
-                    + '<div class="flex items-center gap-2">'
-                    + '<div class="flex-1 bg-gray-700 rounded-full h-1">'
-                    + '<div class="bg-gradient-to-r from-tiktok-cyan to-tiktok-pink h-1 rounded-full" style="width:' + pct + '%"></div>'
-                    + '</div>'
-                    + '<span class="text-[10px] text-gray-500 flex-shrink-0">' + g.gift_count + 'x</span>'
-                    + '</div></div></div>';
-            }).join('');
         }
 
-        function esc(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
-        function fmtTs(ts) { if (!ts) return ''; try { return new Date(ts).toLocaleTimeString(); } catch { return ts; } }
+        function buildGifter(g, topUsd) {
+            const wrap = document.createElement('div');
+            wrap.className = 'flex items-center gap-2 px-2 py-2 rounded-lg bg-gray-800/30';
+            wrap.innerHTML =
+                '<div class="gifter-medal w-6 text-center text-sm"></div>'
+                + '<div class="flex-1 min-w-0">'
+                + '<div class="flex items-center justify-between mb-0.5">'
+                + '<span class="gifter-name font-medium text-sm truncate"></span>'
+                + '<span class="gifter-usd text-sm font-bold text-tiktok-cyan ml-1"></span>'
+                + '</div>'
+                + '<div class="flex items-center gap-2">'
+                + '<div class="flex-1 bg-gray-700 rounded-full h-1">'
+                + '<div class="gifter-bar bg-gradient-to-r from-tiktok-cyan to-tiktok-pink h-1 rounded-full" style="width:0%"></div>'
+                + '</div>'
+                + '<span class="gifter-count text-[10px] text-gray-500 flex-shrink-0"></span>'
+                + '</div></div>';
+            wrap.querySelector('.gifter-name').textContent = g.sender;
+            updateGifter(wrap, g, topUsd);
+            return wrap;
+        }
+
+        function updateGifter(node, g, topUsd) {
+            const pct = Math.max(5, (g.total_usd / topUsd) * 100);
+            const bar = node.querySelector('.gifter-bar');
+            const w = pct + '%';
+            if (bar.style.width !== w) bar.style.width = w;
+            setNodeText(node, '.gifter-usd', '$' + g.total_usd);
+            setNodeText(node, '.gifter-count', g.gift_count + 'x');
+        }
+
+        function esc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+        function fmtTs(ts) { if (!ts) return ''; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return ts; } }
 
         let toastTimeout = null;
         function showToast(msg, type) {
@@ -412,12 +603,14 @@
         function startPolling() {
             if (pollTimer) clearInterval(pollTimer);
             if (trackedTimer) clearInterval(trackedTimer);
+            // Fast tick: numbers + feed + status + top gifters
             pollTimer = setInterval(() => {
+                fetchStatus();
                 fetchEarnings();
                 fetchGifts();
-                fetchStatus();
                 fetchTopGifters();
             }, 3000);
+            // Slow tick: tracked bar + stream history (less volatile)
             trackedTimer = setInterval(() => {
                 refreshTracked();
                 fetchStreams();

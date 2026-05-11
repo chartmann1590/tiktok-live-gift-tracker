@@ -3,6 +3,14 @@ services:
     build: .
     ports:
       - "5000:5000"
+    # SQLite (gifts.db + WAL/SHM) lives under DATA_DIR; must stay on a volume, not the image layer.
+    environment:
+      DATA_DIR: /app/data
     volumes:
-      - ./data:/app/data
+      # Named volume: persists across `docker compose build --no-cache`, image rebuilds, and
+      # `docker compose down` (omit `down -v` or you remove this volume and lose the DB).
+      - tiktok_monitor_data:/app/data
     restart: unless-stopped
+
+volumes:
+  tiktok_monitor_data:
