@@ -23,12 +23,23 @@ DATA_DIR = os.path.abspath(
 )
 DB_PATH = os.path.join(DATA_DIR, "gifts.db")
 
+
+def listeners_disabled() -> bool:
+    """When true, no TikTok WebSocket threads are started (docs / screenshot runs)."""
+    return os.environ.get("DISABLE_TIKTOK_LISTENERS", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
 os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
 
 active_lock = threading.Lock()
 active_listeners: dict[str, dict] = {}
+streamer_avatars: dict[str, str] = {}
+sender_avatars: dict[str, str] = {}
 
 
 def get_db():
@@ -157,6 +168,26 @@ async def _run_listener(username: str):
                     active_listeners[username][
                         "connected_at"
                     ] = datetime.now(timezone.utc).isoformat()
+            try:
+                ri = client.room_info
+                if isinstance(ri, dict):
+                    avatar_url = None
+                    for get_url in [
+                        lambda: ri["data"]["owner"]["avatar_thumb"]["url_list"][0],
+                        lambda: ri["data"]["owner"]["avatar_thumb"][0],
+                        lambda: ri["owner"]["avatar_thumb"]["url_list"][0],
+                        lambda: ri["data"]["user"]["avatar_thumb"]["url_list"][0],
+                    ]:
+                        try:
+                            avatar_url = get_url()
+                            if avatar_url:
+                                break
+                        except (KeyError, TypeError, IndexError):
+                            continue
+                    if avatar_url:
+                        streamer_avatars[username] = avatar_url
+            except Exception:
+                pass
 
         @client.on(DisconnectEvent)
         async def on_disconnect(event: DisconnectEvent):
@@ -179,6 +210,14 @@ async def _run_listener(username: str):
             if gift.streakable and event.streaking:
                 return
 
+            sender_name = event.user.nickname or event.user.unique_id
+            try:
+                pic = getattr(event.user, "profile_picture_url", None)
+                if pic:
+                    sender_avatars[sender_name] = pic
+            except Exception:
+                pass
+
             per_unit = resolve_diamonds_per_unit(
                 int(gift.id),
                 gift.name or "",
@@ -191,7 +230,7 @@ async def _run_listener(username: str):
 
             _insert_gift(
                 username,
-                event.user.nickname or event.user.unique_id,
+                sender_name,
                 gift.name,
                 diamonds,
                 usd,
@@ -239,6 +278,19 @@ def start_listener(username: str) -> bool:
         if username in active_listeners:
             return False
 
+        if listeners_disabled():
+            demo_sid = os.environ.get("DEMO_STREAM_ID", "demo_room_active").strip()
+            if not demo_sid:
+                demo_sid = "demo_room_active"
+            active_listeners[username] = {
+                "thread": None,
+                "live": True,
+                "stream_id": demo_sid,
+                "connected_at": datetime.now(timezone.utc).isoformat(),
+                "stopping": False,
+            }
+            return True
+
         t = threading.Thread(
             target=_thread_entry, args=(username,), daemon=True
         )
@@ -263,10 +315,22 @@ def stop_listener(username: str) -> bool:
         if info is None:
             return False
         info["stopping"] = True
+        if info.get("thread") is None:
+            active_listeners.pop(username, None)
+            return True
     return True
 
 
 def _start_all_tracked():
+    if listeners_disabled():
+        tracked = _get_tracked_users()
+        for t in tracked:
+            start_listener(t["username"])
+        if tracked:
+            print(
+                f"[*] Demo mode: registered {len(tracked)} tracked user(s) without TikTok listeners"
+            )
+        return
     tracked = _get_tracked_users()
     for t in tracked:
         start_listener(t["username"])
@@ -324,6 +388,13 @@ def api_tracked():
                 info = active_listeners.get(t["username"])
                 t["is_active"] = info is not None
                 t["live"] = info.get("live", False) if info else False
+                t["avatar_url"] = streamer_avatars.get(t["username"])
+                if t["live"] and not listeners_disabled():
+                    t["live_url"] = (
+                        f"https://www.tiktok.com/@{t['username']}/live"
+                    )
+                else:
+                    t["live_url"] = None
 
                 row = conn.execute(
                     "SELECT COUNT(*) AS cnt, COALESCE(SUM(usd_value), 0) AS total FROM gifts WHERE username = ?",
@@ -349,6 +420,12 @@ def api_status(username):
             "status": "live" if info.get("live") else "offline",
             "stream_id": info.get("stream_id"),
             "connected_at": info.get("connected_at"),
+            "avatar_url": streamer_avatars.get(username),
+            "live_url": (
+                f"https://www.tiktok.com/@{username}/live"
+                if info.get("live") and not listeners_disabled()
+                else None
+            ),
         }
     )
 
@@ -447,6 +524,7 @@ def api_gifts(username):
                 "diamond_value": r["diamond_value"],
                 "usd_value": round(float(r["usd_value"]), 2),
                 "timestamp": r["timestamp"],
+                "sender_avatar": sender_avatars.get(r["sender"]),
             }
             if not stream_id:
                 g["stream_id"] = r["stream_id"]
@@ -518,7 +596,12 @@ def api_top_gifters(username):
                 """,
                 (username,),
             ).fetchall()
-        return jsonify([dict(r) for r in rows])
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["avatar_url"] = sender_avatars.get(r["sender"])
+            result.append(d)
+        return jsonify(result)
     finally:
         conn.close()
 
@@ -527,4 +610,5 @@ init_db()
 _start_all_tracked()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)

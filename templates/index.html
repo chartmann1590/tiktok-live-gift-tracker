@@ -68,6 +68,10 @@
             <div class="flex items-center gap-3 mb-4">
                 <span id="selectedLabel" class="text-xl font-semibold"></span>
                 <span id="statusBadge" class="px-3 py-1 text-sm font-medium rounded-full"></span>
+                <a id="watchLiveBtn" href="#" target="_blank" rel="noopener" class="hidden px-3 py-1.5 text-sm font-semibold rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors flex items-center gap-1.5">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Watch Live
+                </a>
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
@@ -262,6 +266,7 @@
             const badge = document.getElementById('statusBadge');
             const status = document.getElementById('streamStatus');
             const since = document.getElementById('connectedSince');
+            const liveBtn = document.getElementById('watchLiveBtn');
             let badgeText, badgeClass, statusText, statusClass, sinceText;
             if (d.status === 'live') {
                 badgeText = 'LIVE';
@@ -269,18 +274,30 @@
                 statusText = 'Live';
                 statusClass = 'text-2xl font-bold text-green-400';
                 sinceText = d.connected_at ? 'Since ' + new Date(d.connected_at).toLocaleTimeString() : '';
+                if (liveBtn) {
+                    if (d.live_url) {
+                        liveBtn.href = d.live_url;
+                        liveBtn.classList.remove('hidden');
+                        liveBtn.classList.add('inline-flex');
+                    } else {
+                        liveBtn.classList.add('hidden');
+                        liveBtn.classList.remove('inline-flex');
+                    }
+                }
             } else if (d.status === 'offline') {
                 badgeText = 'OFFLINE \u2013 RECONNECTING';
                 badgeClass = 'px-3 py-1 text-sm font-medium rounded-full bg-yellow-500/20 text-yellow-400';
                 statusText = 'Reconnecting...';
                 statusClass = 'text-2xl font-bold text-yellow-400';
                 sinceText = 'Auto-reconnect enabled';
+                if (liveBtn) { liveBtn.classList.add('hidden'); liveBtn.classList.remove('inline-flex'); }
             } else {
                 badgeText = 'NOT TRACKED';
                 badgeClass = 'px-3 py-1 text-sm font-medium rounded-full bg-gray-700 text-gray-400';
                 statusText = '--';
                 statusClass = 'text-2xl font-bold text-gray-500';
                 sinceText = '';
+                if (liveBtn) { liveBtn.classList.add('hidden'); liveBtn.classList.remove('inline-flex'); }
             }
             if (badge.textContent !== badgeText) badge.textContent = badgeText;
             if (badge.className !== badgeClass) badge.className = badgeClass;
@@ -387,15 +404,22 @@
             const wrap = document.createElement('div');
             wrap.className = 'flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-900 border cursor-pointer hover:border-gray-600 transition-colors min-w-[150px]';
             wrap.innerHTML =
-                '<span class="t-dot w-2.5 h-2.5 rounded-full flex-shrink-0"></span>'
+                avatar(u.avatar_url, u.username.charAt(0).toUpperCase(), 'w-7 h-7')
                 + '<div class="flex-1 min-w-0"><div class="t-name text-sm font-medium truncate"></div><div class="t-meta text-xs text-gray-500"></div></div>'
+                + '<a class="t-live hidden px-1.5 py-0.5 text-[10px] font-semibold rounded bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors flex-shrink-0" target="_blank" rel="noopener">LIVE</a>'
                 + '<button class="t-close text-gray-600 hover:text-red-400 transition-colors flex-shrink-0" title="Stop tracking"><svg class="w-4 h-4 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
             wrap.querySelector('.t-name').textContent = u.username;
-            wrap.addEventListener('click', () => selectUser(u.username));
+            wrap.addEventListener('click', e => {
+                if (e.target.closest('.t-live') || e.target.closest('.t-close')) return;
+                selectUser(u.username);
+            });
             wrap.querySelector('.t-close').addEventListener('click', e => {
                 e.stopPropagation();
                 stopTracking(u.username);
             });
+            const liveLink = wrap.querySelector('.t-live');
+            if (u.live_url) liveLink.href = u.live_url;
+            else liveLink.removeAttribute('href');
             updateTrackedItem(wrap, u);
             return wrap;
         }
@@ -404,10 +428,15 @@
             const isSel = u.username === selectedUser;
             node.classList.toggle('border-tiktok-cyan', isSel);
             node.classList.toggle('border-gray-800', !isSel);
-            const dot = node.querySelector('.t-dot');
-            dot.classList.toggle('bg-green-400', !!u.live);
-            dot.classList.toggle('live-badge', !!u.live);
-            dot.classList.toggle('bg-gray-600', !u.live);
+            const liveLink = node.querySelector('.t-live');
+            if (u.live && u.live_url) {
+                liveLink.href = u.live_url;
+                liveLink.classList.remove('hidden');
+                liveLink.classList.add('inline-block');
+            } else {
+                liveLink.classList.add('hidden');
+                liveLink.classList.remove('inline-block');
+            }
             setNodeText(node, '.t-meta', '$' + u.total_earnings.toFixed(2) + ' \u00B7 ' + u.total_gifts + ' gifts');
         }
 
@@ -425,12 +454,11 @@
         }
 
         function buildGiftItem(g) {
-            // Newly built nodes are highlighted; first update() demotes them.
             const div = document.createElement('div');
             div.className = 'gift-item flex items-center justify-between px-2.5 py-2 rounded-lg bg-gray-800/80';
             div.innerHTML =
                 '<div class="flex items-center gap-2 min-w-0">'
-                + '<div class="w-7 h-7 rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center text-[10px] font-bold flex-shrink-0">' + esc(g.sender.charAt(0).toUpperCase()) + '</div>'
+                + avatar(g.sender_avatar, g.sender.charAt(0).toUpperCase(), 'w-7 h-7')
                 + '<div class="min-w-0">'
                 + '<span class="font-medium text-sm">' + esc(g.sender) + '</span>'
                 + '<span class="text-gray-500 text-sm"> \u2192 </span>'
@@ -518,6 +546,7 @@
                     ? '<p class="text-gray-500 text-sm py-2">No gifts.</p>'
                     : gifts.map(g => '<div class="flex items-center justify-between px-2 py-1 rounded bg-gray-900/50 text-xs">'
                         + '<div class="flex items-center gap-1.5 min-w-0">'
+                        + avatar(g.sender_avatar, g.sender.charAt(0).toUpperCase(), 'w-5 h-5')
                         + '<span class="font-medium">' + esc(g.sender) + '</span>'
                         + '<span class="text-gray-600">\u2192</span>'
                         + '<span class="text-tiktok-cyan">' + esc(g.gift_name) + '</span>'
@@ -561,6 +590,7 @@
             wrap.className = 'flex items-center gap-2 px-2 py-2 rounded-lg bg-gray-800/30';
             wrap.innerHTML =
                 '<div class="gifter-medal w-6 text-center text-sm"></div>'
+                + avatar(g.avatar_url, g.sender.charAt(0).toUpperCase(), 'w-6 h-6')
                 + '<div class="flex-1 min-w-0">'
                 + '<div class="flex items-center justify-between mb-0.5">'
                 + '<span class="gifter-name font-medium text-sm truncate"></span>'
@@ -587,6 +617,12 @@
         }
 
         function esc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+        function avatar(url, initial, cls) {
+            if (url) {
+                return '<div class="rounded-full flex-shrink-0 overflow-hidden bg-gray-700 ' + cls + '"><img src="' + esc(url) + '" class="w-full h-full object-cover" loading="lazy"></div>';
+            }
+            return '<div class="rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center font-bold flex-shrink-0 text-white ' + cls + '" style="font-size:10px">' + esc(initial) + '</div>';
+        }
         function fmtTs(ts) { if (!ts) return ''; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return ts; } }
 
         let toastTimeout = null;

@@ -9,6 +9,14 @@ Real-time gift tracking dashboard for TikTok live streams. Connects to public Ti
 ![Python](https://img.shields.io/badge/Python-3.12-yellow)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## Screenshots
+
+The images below use **synthetic labels and demo data only** (no real TikTok users or profile links). To regenerate them locally, see the header comment in [`scripts/seed_screenshot_db.py`](scripts/seed_screenshot_db.py) and run the app with `DISABLE_TIKTOK_LISTENERS=1` so no live WebSocket connections are opened.
+
+![Empty dashboard — add a channel to begin tracking](docs/images/readme-empty-state.png)
+
+![Live dashboard — gift feed, stream history, and top gifters](docs/images/readme-dashboard.png)
+
 ## Support & sponsor
 
 This project is **MIT-licensed and free to self-host** — no paywalls, no API keys, no tracking. If it helps your stream, your agency, or your workflow, **consider sponsoring** so I can keep improving reliability, docs, and features.
