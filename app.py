@@ -5,6 +5,7 @@ import asyncio
 import time
 from datetime import datetime, timezone
 
+import requests as http_requests
 from flask import Flask, render_template, request, jsonify
 
 from money import diamonds_to_usd, index_gift_catalog, resolve_diamonds_per_unit
@@ -35,6 +36,13 @@ def listeners_disabled() -> bool:
     )
 
 os.makedirs(DATA_DIR, exist_ok=True)
+
+LIBRETRANSLATE_URL = os.environ.get("LIBRETRANSLATE_URL", "").rstrip("/")
+DEFAULT_TARGET_LANG = os.environ.get("DEFAULT_TARGET_LANG", "en")
+LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "")
+
+_translate_languages_cache = None
+_translate_lang_lock = threading.Lock()
 
 app = Flask(__name__)
 
@@ -796,6 +804,77 @@ def api_chat_clear(username):
         return jsonify({"status": "cleared", "deleted": deleted, "username": username})
     finally:
         conn.close()
+
+
+def _detected_language_from_lt(result: dict) -> str | None:
+    """LibreTranslate returns detectedLanguage as an object or, on some builds, a string."""
+    dl = result.get("detectedLanguage")
+    if isinstance(dl, dict):
+        return dl.get("language")
+    if isinstance(dl, str):
+        return dl
+    return None
+
+
+@app.route("/api/translate", methods=["POST"])
+def api_translate():
+    if not LIBRETRANSLATE_URL:
+        return jsonify({"error": "LibreTranslate is not configured"}), 503
+
+    data = request.get_json(silent=True) or {}
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"translated_text": "", "detected_language": None})
+
+    target_lang = data.get("target_lang") or DEFAULT_TARGET_LANG
+    source_lang = data.get("source_lang") or "auto"
+
+    payload = {
+        "q": text,
+        "source": source_lang,
+        "target": target_lang,
+        "format": "text",
+    }
+    if LIBRETRANSLATE_API_KEY:
+        payload["api_key"] = LIBRETRANSLATE_API_KEY
+
+    try:
+        resp = http_requests.post(
+            f"{LIBRETRANSLATE_URL}/translate",
+            json=payload,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        return jsonify({
+            "translated_text": result.get("translatedText", ""),
+            "detected_language": _detected_language_from_lt(result),
+        })
+    except http_requests.RequestException as e:
+        return jsonify({"error": f"Translation failed: {str(e)}"}), 502
+
+
+@app.route("/api/translate/languages")
+def api_translate_languages():
+    global _translate_languages_cache
+
+    if not LIBRETRANSLATE_URL:
+        return jsonify({"error": "LibreTranslate is not configured"}), 503
+
+    with _translate_lang_lock:
+        if _translate_languages_cache is not None:
+            return jsonify(_translate_languages_cache)
+
+        try:
+            resp = http_requests.get(
+                f"{LIBRETRANSLATE_URL}/languages",
+                timeout=10,
+            )
+            resp.raise_for_status()
+            _translate_languages_cache = resp.json()
+            return jsonify(_translate_languages_cache)
+        except http_requests.RequestException as e:
+            return jsonify({"error": f"Failed to fetch languages: {str(e)}"}), 502
 
 
 init_db()

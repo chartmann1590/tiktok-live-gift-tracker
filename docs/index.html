@@ -206,6 +206,13 @@
                     <p class="text-gray-400 text-sm leading-relaxed">Captures all chat messages and emotes during a stream. Browse full chat logs for any past stream, with deduplication and clear controls.</p>
                 </div>
                 <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center mb-4">
+                        <svg class="w-5 h-5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"/></svg>
+                    </div>
+                    <h3 class="font-semibold text-lg mb-2">Chat Translation</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Auto-translate chat messages via LibreTranslate. Supports 49+ languages with auto-detection and a user-selectable target language dropdown.</p>
+                </div>
+                <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
                     <div class="w-10 h-10 rounded-lg bg-tiktok-cyan/10 flex items-center justify-center mb-4">
                         <svg class="w-5 h-5 text-tiktok-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
                     </div>
@@ -240,6 +247,20 @@ cd tiktok-live-gift-tracker</code></pre>
                         <span class="text-tiktok-cyan font-bold text-sm">2</span>
                     </div>
                     <div class="flex-1">
+                        <h3 class="font-semibold mb-2">Optional: Configure chat translation</h3>
+                        <div class="code-block p-4">
+                            <pre class="text-gray-300"><code>cp .env.template .env
+# Edit .env and set LIBRETRANSLATE_URL to your LibreTranslate instance</code></pre>
+                        </div>
+                        <p class="text-gray-500 text-sm mt-2">Requires a self-hosted <a href="https://github.com/LibreTranslate/LibreTranslate" class="text-tiktok-cyan hover:underline">LibreTranslate</a> instance. Skip this step if you don't need translation.</p>
+                    </div>
+                </div>
+
+                <div class="flex gap-4">
+                    <div class="w-8 h-8 rounded-full bg-tiktok-cyan/10 flex items-center justify-center flex-shrink-0 mt-1">
+                        <span class="text-tiktok-cyan font-bold text-sm">3</span>
+                    </div>
+                    <div class="flex-1">
                         <h3 class="font-semibold mb-2">Start the app</h3>
                         <div class="code-block p-4">
                             <pre class="text-gray-300"><code>docker compose up -d</code></pre>
@@ -249,7 +270,7 @@ cd tiktok-live-gift-tracker</code></pre>
 
                 <div class="flex gap-4">
                     <div class="w-8 h-8 rounded-full bg-tiktok-cyan/10 flex items-center justify-center flex-shrink-0 mt-1">
-                        <span class="text-tiktok-cyan font-bold text-sm">3</span>
+                        <span class="text-tiktok-cyan font-bold text-sm">4</span>
                     </div>
                     <div class="flex-1">
                         <h3 class="font-semibold mb-2">Open the dashboard and start tracking</h3>
@@ -313,6 +334,16 @@ cd tiktok-live-gift-tracker</code></pre>
                     <span class="px-2 py-0.5 rounded text-xs font-bold bg-red-500/20 text-red-400">DELETE</span>
                     <code class="text-sm text-gray-300">/api/chat/&lt;user&gt;</code>
                     <span class="text-gray-600 ml-auto text-sm">Clear chat logs</span>
+                </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-green-500/20 text-green-400">POST</span>
+                    <code class="text-sm text-gray-300">/api/translate</code>
+                    <span class="text-gray-600 ml-auto text-sm">Translate text (auto-detect)</span>
+                </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400">GET</span>
+                    <code class="text-sm text-gray-300">/api/translate/languages</code>
+                    <span class="text-gray-600 ml-auto text-sm">Supported languages</span>
                 </div>
             </div>
         </div>

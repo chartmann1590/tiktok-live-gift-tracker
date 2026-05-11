@@ -39,6 +39,7 @@ This project is **MIT-licensed and free to self-host** — no paywalls, no API k
 - **Stream history** — browse every past stream with full gift breakdowns and chat logs
 - **Top gifters leaderboard** — see who's donated the most across all time
 - **Dark mode dashboard** — clean Tailwind CSS UI with live status indicators
+- **Chat translation** — auto-translate chat messages via LibreTranslate with language auto-detection and user-selectable target language
 - **One-command deploy** — Docker Compose with persistent volume
 
 ## Quick Start
@@ -46,6 +47,26 @@ This project is **MIT-licensed and free to self-host** — no paywalls, no API k
 ```bash
 git clone https://github.com/chartmann1590/tiktok-live-gift-tracker.git
 cd tiktok-live-gift-tracker
+```
+
+### Optional: Enable Chat Translation
+
+Copy the env template and configure your [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) instance:
+
+```bash
+cp .env.template .env
+```
+
+Edit `.env` and set your LibreTranslate URL:
+
+```
+LIBRETRANSLATE_URL=http://YOUR_LIBRETRANSLATE_HOST:3006
+DEFAULT_TARGET_LANG=en
+```
+
+Then start the app:
+
+```bash
 docker compose up -d
 ```
 
@@ -94,8 +115,23 @@ Flask (web server, main thread)
 | `GET` | `/api/chat/<user>` | Chat messages (all or per-stream) |
 | `GET` | `/api/chat/<user>/streams` | Streams with chat log counts |
 | `DELETE` | `/api/chat/<user>` | Clear chat logs (all or per-stream) |
+| `POST` | `/api/translate` | Translate text via LibreTranslate (auto-detect source) |
+| `GET` | `/api/translate/languages` | List supported translation languages |
 
 ## Configuration
+
+### Environment Variables
+
+Copy `.env.template` to `.env` and customize. The file is gitignored so your values stay local.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LIBRETRANSLATE_URL` | _(empty)_ | Base URL of your LibreTranslate instance (e.g. `http://192.168.1.50:3006`). Leave empty to disable translation. |
+| `DEFAULT_TARGET_LANG` | `en` | Default language to translate chat messages to |
+| `LIBRETRANSLATE_API_KEY` | _(empty)_ | API key if your LibreTranslate instance requires one |
+| `DATA_DIR` | `./data` | Directory for SQLite database files |
+| `PORT` | `5000` | Flask server port |
+| `DISABLE_TIKTOK_LISTENERS` | `false` | Set to `true` for demo/screenshot mode |
 
 ### Persistent Storage
 
