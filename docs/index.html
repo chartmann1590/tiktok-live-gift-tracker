@@ -213,6 +213,13 @@
                     <p class="text-gray-400 text-sm leading-relaxed">Auto-translate chat messages via LibreTranslate. Supports 49+ languages with auto-detection and a user-selectable target language dropdown.</p>
                 </div>
                 <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
+                    <div class="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center mb-4">
+                        <svg class="w-5 h-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                    </div>
+                    <h3 class="font-semibold text-lg mb-2">AI Chat Analysis</h3>
+                    <p class="text-gray-400 text-sm leading-relaxed">Periodic AI-powered chat overviews during live streams via Ollama. Full stream summaries generated automatically when a stream ends.</p>
+                </div>
+                <div class="card-hover bg-gray-900 border border-gray-800 rounded-xl p-6">
                     <div class="w-10 h-10 rounded-lg bg-tiktok-cyan/10 flex items-center justify-center mb-4">
                         <svg class="w-5 h-5 text-tiktok-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
                     </div>
@@ -261,6 +268,21 @@ cd tiktok-live-gift-tracker</code></pre>
                         <span class="text-tiktok-cyan font-bold text-sm">3</span>
                     </div>
                     <div class="flex-1">
+                        <h3 class="font-semibold mb-2">Optional: Configure AI chat analysis</h3>
+                        <div class="code-block p-4">
+                            <pre class="text-gray-300"><code># Add to .env
+OLLAMA_BASE_URL=http://YOUR_OLLAMA_HOST:11434
+OLLAMA_MODEL=llama3.2</code></pre>
+                        </div>
+                        <p class="text-gray-500 text-sm mt-2">Requires a running <a href="https://ollama.ai" class="text-tiktok-cyan hover:underline">Ollama</a> instance. Provides periodic AI chat overviews during live streams and full summaries when streams end. Skip if you don't need AI analysis.</p>
+                    </div>
+                </div>
+
+                <div class="flex gap-4">
+                    <div class="w-8 h-8 rounded-full bg-tiktok-cyan/10 flex items-center justify-center flex-shrink-0 mt-1">
+                        <span class="text-tiktok-cyan font-bold text-sm">5</span>
+                    </div>
+                    <div class="flex-1">
                         <h3 class="font-semibold mb-2">Start the app</h3>
                         <div class="code-block p-4">
                             <pre class="text-gray-300"><code>docker compose up -d</code></pre>
@@ -270,7 +292,7 @@ cd tiktok-live-gift-tracker</code></pre>
 
                 <div class="flex gap-4">
                     <div class="w-8 h-8 rounded-full bg-tiktok-cyan/10 flex items-center justify-center flex-shrink-0 mt-1">
-                        <span class="text-tiktok-cyan font-bold text-sm">4</span>
+                        <span class="text-tiktok-cyan font-bold text-sm">6</span>
                     </div>
                     <div class="flex-1">
                         <h3 class="font-semibold mb-2">Open the dashboard and start tracking</h3>
@@ -344,6 +366,16 @@ cd tiktok-live-gift-tracker</code></pre>
                     <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400">GET</span>
                     <code class="text-sm text-gray-300">/api/translate/languages</code>
                     <span class="text-gray-600 ml-auto text-sm">Supported languages</span>
+                </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400">GET</span>
+                    <code class="text-sm text-gray-300">/api/summary/&lt;user&gt;</code>
+                    <span class="text-gray-600 ml-auto text-sm">AI live overview (current stream)</span>
+                </div>
+                <div class="flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
+                    <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/20 text-blue-400">GET</span>
+                    <code class="text-sm text-gray-300">/api/summary/&lt;user&gt;/&lt;stream&gt;</code>
+                    <span class="text-gray-600 ml-auto text-sm">AI summary for a past stream</span>
                 </div>
             </div>
         </div>

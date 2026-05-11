@@ -41,6 +41,9 @@ LIBRETRANSLATE_URL = os.environ.get("LIBRETRANSLATE_URL", "").rstrip("/")
 DEFAULT_TARGET_LANG = os.environ.get("DEFAULT_TARGET_LANG", "en")
 LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "")
 
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
+
 _translate_languages_cache = None
 _translate_lang_lock = threading.Lock()
 
@@ -135,6 +138,22 @@ def init_db():
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_dedup ON chat_messages(msg_id)"
         )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stream_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            summary_type TEXT NOT NULL,
+            summary_text TEXT NOT NULL,
+            analyzed_count INTEGER NOT NULL DEFAULT 0,
+            timestamp DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_unique ON stream_summaries(username, stream_id, summary_type)"
+    )
     conn.commit()
     conn.close()
 
@@ -199,6 +218,130 @@ def _get_tracked_users():
         return [{"username": r["username"], "added_at": r["added_at"]} for r in rows]
     finally:
         conn.close()
+
+
+def _query_ollama(system_prompt: str, chat_text: str) -> str | None:
+    if not OLLAMA_BASE_URL or not chat_text.strip():
+        return None
+    try:
+        resp = http_requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": chat_text},
+                ],
+                "stream": False,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("message", {}).get("content", "").strip() or None
+    except Exception:
+        return None
+
+
+def _upsert_summary(username, stream_id, summary_type, summary_text, analyzed_count):
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO stream_summaries (username, stream_id, summary_type, summary_text, analyzed_count, timestamp)
+            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            ON CONFLICT(username, stream_id, summary_type) DO UPDATE SET
+                summary_text = excluded.summary_text,
+                analyzed_count = excluded.analyzed_count,
+                timestamp = excluded.timestamp
+            """,
+            (username, stream_id, summary_type, summary_text, analyzed_count),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ollama_live_overview_loop():
+    while True:
+        time.sleep(60)
+        if not OLLAMA_BASE_URL:
+            continue
+        targets = []
+        with active_lock:
+            for uname, info in active_listeners.items():
+                if info.get("live") and info.get("stream_id"):
+                    targets.append((uname, info["stream_id"]))
+        for uname, sid in targets:
+            try:
+                conn = get_db()
+                try:
+                    rows = conn.execute(
+                        "SELECT sender, message FROM chat_messages WHERE username = ? AND stream_id = ? ORDER BY id DESC LIMIT 200",
+                        (uname, sid),
+                    ).fetchall()
+                finally:
+                    conn.close()
+                if not rows:
+                    continue
+                existing = None
+                conn2 = get_db()
+                try:
+                    row = conn2.execute(
+                        "SELECT analyzed_count FROM stream_summaries WHERE username = ? AND stream_id = ? AND summary_type = 'live_overview'",
+                        (uname, sid),
+                    ).fetchone()
+                    existing = row["analyzed_count"] if row else None
+                finally:
+                    conn2.close()
+                if existing is not None and len(rows) <= existing:
+                    continue
+                chat_text = "\n".join(
+                    f"{r['sender']}: {r['message']}" for r in reversed(rows)
+                )
+                summary = _query_ollama(
+                    "You are an assistant that analyzes livestream chat logs. "
+                    "Provide a concise overview (2-3 paragraphs) of the chat: "
+                    "main topics being discussed, overall viewer sentiment and energy, "
+                    "notable interactions, and any recurring themes. "
+                    "Be specific and reference actual messages where relevant.",
+                    f"Here are recent chat messages from @{uname}'s TikTok livestream (stream ID: {sid}):\n\n{chat_text}",
+                )
+                if summary:
+                    _upsert_summary(uname, sid, "live_overview", summary, len(rows))
+            except Exception:
+                pass
+
+
+def _ollama_full_summary(username, stream_id):
+    if not OLLAMA_BASE_URL or not stream_id:
+        return
+    try:
+        conn = get_db()
+        try:
+            rows = conn.execute(
+                "SELECT sender, message FROM chat_messages WHERE username = ? AND stream_id = ? ORDER BY id ASC LIMIT 500",
+                (username, stream_id),
+            ).fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return
+        chat_text = "\n".join(
+            f"{r['sender']}: {r['message']}" for r in rows
+        )
+        summary = _query_ollama(
+            "You are an assistant that analyzes livestream chat logs. "
+            "Provide a comprehensive summary of the entire stream chat including: "
+            "main topics discussed, overall viewer sentiment, most active participants, "
+            "key moments or highlights, recurring themes, and notable interactions. "
+            "Be thorough but well-organized. Use paragraphs and bullet points where helpful.",
+            f"Here is the complete chat log from @{username}'s TikTok livestream (stream ID: {stream_id}):\n\n{chat_text}",
+        )
+        if summary:
+            _upsert_summary(username, stream_id, "full_summary", summary, len(rows))
+    except Exception:
+        pass
 
 
 async def _run_listener(username: str):
@@ -377,10 +520,18 @@ async def _run_listener(username: str):
             with active_lock:
                 if username in active_listeners:
                     active_listeners[username]["live"] = False
+            ended_stream_id = stream_id_holder[0]
             try:
                 await client.disconnect()
             except Exception:
                 pass
+            if ended_stream_id:
+                t = threading.Thread(
+                    target=_ollama_full_summary,
+                    args=(username, ended_stream_id),
+                    daemon=True,
+                )
+                t.start()
 
         with active_lock:
             info = active_listeners.get(username)
@@ -877,8 +1028,63 @@ def api_translate_languages():
             return jsonify({"error": f"Failed to fetch languages: {str(e)}"}), 502
 
 
+@app.route("/api/summary/<username>")
+def api_summary_current(username):
+    username = normalize_username(username)
+    with active_lock:
+        info = active_listeners.get(username)
+    stream_id = info.get("stream_id") if info else None
+    if not stream_id:
+        return jsonify({"username": username, "summary": None})
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT summary_text, analyzed_count, timestamp FROM stream_summaries WHERE username = ? AND stream_id = ? AND summary_type = 'live_overview'",
+            (username, stream_id),
+        ).fetchone()
+        if row:
+            return jsonify({
+                "username": username,
+                "stream_id": stream_id,
+                "summary": row["summary_text"],
+                "analyzed_count": row["analyzed_count"],
+                "timestamp": row["timestamp"],
+            })
+        return jsonify({"username": username, "stream_id": stream_id, "summary": None})
+    finally:
+        conn.close()
+
+
+@app.route("/api/summary/<username>/<stream_id>")
+def api_summary_stream(username, stream_id):
+    username = normalize_username(username)
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT summary_type, summary_text, analyzed_count, timestamp FROM stream_summaries WHERE username = ? AND stream_id = ? ORDER BY CASE summary_type WHEN 'full_summary' THEN 0 ELSE 1 END LIMIT 1",
+            (username, stream_id),
+        ).fetchone()
+        if row:
+            return jsonify({
+                "username": username,
+                "stream_id": stream_id,
+                "summary_type": row["summary_type"],
+                "summary": row["summary_text"],
+                "analyzed_count": row["analyzed_count"],
+                "timestamp": row["timestamp"],
+            })
+        return jsonify({"username": username, "stream_id": stream_id, "summary": None})
+    finally:
+        conn.close()
+
+
 init_db()
 _start_all_tracked()
+
+if OLLAMA_BASE_URL:
+    _overview_thread = threading.Thread(target=_ollama_live_overview_loop, daemon=True)
+    _overview_thread.start()
+    print(f"[*] Ollama AI chat analysis enabled (model: {OLLAMA_MODEL})")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))

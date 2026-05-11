@@ -40,6 +40,7 @@ This project is **MIT-licensed and free to self-host** — no paywalls, no API k
 - **Top gifters leaderboard** — see who's donated the most across all time
 - **Dark mode dashboard** — clean Tailwind CSS UI with live status indicators
 - **Chat translation** — auto-translate chat messages via LibreTranslate with language auto-detection and user-selectable target language
+- **AI chat analysis** — periodic AI-powered chat overviews during live streams via Ollama, plus full stream summaries when a stream ends
 - **One-command deploy** — Docker Compose with persistent volume
 
 ## Quick Start
@@ -62,6 +63,15 @@ Edit `.env` and set your LibreTranslate URL:
 ```
 LIBRETRANSLATE_URL=http://YOUR_LIBRETRANSLATE_HOST:3006
 DEFAULT_TARGET_LANG=en
+```
+
+### Optional: Enable AI Chat Analysis
+
+Configure your [Ollama](https://ollama.ai) instance to get AI-powered chat overviews during live streams and full summaries when streams end:
+
+```
+OLLAMA_BASE_URL=http://YOUR_OLLAMA_HOST:11434
+OLLAMA_MODEL=llama3.2
 ```
 
 Then start the app:
@@ -117,6 +127,8 @@ Flask (web server, main thread)
 | `DELETE` | `/api/chat/<user>` | Clear chat logs (all or per-stream) |
 | `POST` | `/api/translate` | Translate text via LibreTranslate (auto-detect source) |
 | `GET` | `/api/translate/languages` | List supported translation languages |
+| `GET` | `/api/summary/<user>` | Latest AI live overview for current stream |
+| `GET` | `/api/summary/<user>/<stream_id>` | AI summary for a specific stream |
 
 ## Configuration
 
@@ -129,6 +141,8 @@ Copy `.env.template` to `.env` and customize. The file is gitignored so your val
 | `LIBRETRANSLATE_URL` | _(empty)_ | Base URL of your LibreTranslate instance (e.g. `http://192.168.1.50:3006`). Leave empty to disable translation. |
 | `DEFAULT_TARGET_LANG` | `en` | Default language to translate chat messages to |
 | `LIBRETRANSLATE_API_KEY` | _(empty)_ | API key if your LibreTranslate instance requires one |
+| `OLLAMA_BASE_URL` | _(empty)_ | Base URL of your Ollama instance (e.g. `http://192.168.1.50:11434`). Leave empty to disable AI analysis. |
+| `OLLAMA_MODEL` | `llama3.2` | Ollama model to use for chat analysis |
 | `DATA_DIR` | `./data` | Directory for SQLite database files |
 | `PORT` | `5000` | Flask server port |
 | `DISABLE_TIKTOK_LISTENERS` | `false` | Set to `true` for demo/screenshot mode |

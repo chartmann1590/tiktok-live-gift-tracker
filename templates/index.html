@@ -97,6 +97,19 @@
                 </div>
             </div>
 
+            <div id="aiOverviewPanel" class="hidden bg-gray-900 border border-gray-800 rounded-xl p-4 mb-5">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                        <h2 class="text-base font-semibold">AI Chat Overview</h2>
+                    </div>
+                    <span id="aiOverviewMeta" class="text-xs text-gray-500"></span>
+                </div>
+                <div id="aiOverviewContent" class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+                    <p class="text-gray-500 text-center py-2">Waiting for AI analysis...</p>
+                </div>
+            </div>
+
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
                 <div class="lg:col-span-2 space-y-5">
                     <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
@@ -222,6 +235,9 @@
             resetReconciler(document.getElementById('streamsList'));
             resetReconciler(document.getElementById('giftersList'));
             resetReconciler(document.getElementById('chatLog'));
+            document.getElementById('aiOverviewPanel').classList.add('hidden');
+            document.getElementById('aiOverviewContent').innerHTML = '<p class="text-gray-500 text-center py-2">Waiting for AI analysis...</p>';
+            document.getElementById('aiOverviewMeta').textContent = '';
             setText('selectedLabel', '@' + username);
             setText('streamEarnings', '$0.00');
             setText('streamGiftCount', '0 gifts this stream');
@@ -249,7 +265,7 @@
         }
 
         async function fetchAllData() {
-            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters(), fetchChat()]);
+            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters(), fetchChat(), fetchAiOverview()]);
         }
 
         async function fetchEarnings() {
@@ -627,14 +643,18 @@
                 + '<div class="stream-btns flex items-center gap-3 mt-1.5">'
                 + '<button class="stream-toggle text-xs text-tiktok-cyan hover:underline cursor-pointer">View gifts</button>'
                 + '<button class="stream-chat-toggle text-xs text-purple-400 hover:underline cursor-pointer">View chat</button>'
+                + '<button class="stream-ai-toggle text-xs text-amber-300 hover:underline cursor-pointer">View AI summary</button>'
                 + '</div>'
                 + '<div class="stream-gifts hidden mt-2 scroll-area max-h-52 overflow-y-auto space-y-1"></div>'
-                + '<div class="stream-chat hidden mt-2"></div>';
+                + '<div class="stream-chat hidden mt-2"></div>'
+                + '<div class="stream-ai hidden mt-2"></div>';
             const btn = wrap.querySelector('.stream-toggle');
             const sid = s.stream_id;
             btn.addEventListener('click', () => toggleStreamGifts(selectedUser, sid, btn));
             const chatBtn = wrap.querySelector('.stream-chat-toggle');
             chatBtn.addEventListener('click', () => toggleStreamChat(selectedUser, sid, chatBtn));
+            const aiBtn = wrap.querySelector('.stream-ai-toggle');
+            aiBtn.addEventListener('click', () => toggleStreamAi(selectedUser, sid, aiBtn));
             updateStream(wrap, s);
             return wrap;
         }
@@ -867,6 +887,65 @@
             }
         }
 
+        async function fetchAiOverview() {
+            if (!selectedUser || !currentStreamId) {
+                document.getElementById('aiOverviewPanel').classList.add('hidden');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/summary/' + selectedUser);
+                const data = await resp.json();
+                const panel = document.getElementById('aiOverviewPanel');
+                const content = document.getElementById('aiOverviewContent');
+                const meta = document.getElementById('aiOverviewMeta');
+                if (data.summary) {
+                    panel.classList.remove('hidden');
+                    if (content.textContent !== data.summary) content.textContent = data.summary;
+                    const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+                    meta.textContent = data.analyzed_count + ' messages analyzed' + (ts ? ' \u00B7 ' + ts : '');
+                } else if (data.stream_id) {
+                    panel.classList.remove('hidden');
+                    content.innerHTML = '<p class="text-gray-500 text-center py-2">Waiting for AI analysis...</p>';
+                    meta.textContent = '';
+                } else {
+                    panel.classList.add('hidden');
+                }
+            } catch (e) {}
+        }
+
+        async function toggleStreamAi(username, streamId, btn) {
+            const container = btn.closest('.bg-gray-800\\/40').querySelector('.stream-ai');
+            if (!container.classList.contains('hidden')) {
+                container.classList.add('hidden');
+                btn.textContent = 'View AI summary';
+                return;
+            }
+            btn.textContent = 'Hide AI summary';
+            container.classList.remove('hidden');
+            if (container.dataset.loaded === 'true') return;
+            try {
+                const resp = await fetch('/api/summary/' + username + '/' + streamId);
+                const data = await resp.json();
+                if (data.summary) {
+                    const typeLabel = data.summary_type === 'full_summary' ? 'Full Stream Summary' : 'Live Overview';
+                    container.innerHTML =
+                        '<div class="bg-gray-900/50 rounded-lg p-3 border border-gray-700/40">'
+                        + '<div class="flex items-center gap-2 mb-2">'
+                        + '<svg class="w-4 h-4 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>'
+                        + '<span class="text-sm font-semibold text-amber-300">' + esc(typeLabel) + '</span>'
+                        + '<span class="text-xs text-gray-500 ml-auto">' + data.analyzed_count + ' messages \u00B7 ' + (data.timestamp ? new Date(data.timestamp).toLocaleString() : '') + '</span>'
+                        + '</div>'
+                        + '<div class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">' + esc(data.summary) + '</div>'
+                        + '</div>';
+                } else {
+                    container.innerHTML = '<p class="text-gray-500 text-sm py-2">No AI summary available for this stream.</p>';
+                }
+                container.dataset.loaded = 'true';
+            } catch (e) {
+                container.innerHTML = '<p class="text-gray-500 text-sm py-2">Failed to load AI summary.</p>';
+            }
+        }
+
         document.getElementById('autoTranslateToggle').addEventListener('change', function() {
             translateEnabled = this.checked;
             if (translateEnabled) {
@@ -894,6 +973,7 @@
                 fetchGifts();
                 fetchTopGifters();
                 fetchChat();
+                fetchAiOverview();
             }, 3000);
             // Slow tick: tracked bar + stream history (less volatile)
             trackedTimer = setInterval(() => {
