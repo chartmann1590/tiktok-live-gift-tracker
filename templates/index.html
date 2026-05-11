@@ -103,9 +103,14 @@
                         <svg class="w-4 h-4 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
                         <h2 class="text-base font-semibold">AI Chat Overview</h2>
                     </div>
-                    <span id="aiOverviewMeta" class="text-xs text-gray-500"></span>
+                    <div class="flex items-center gap-2">
+                        <span id="aiOverviewMeta" class="text-xs text-gray-500"></span>
+                        <button id="aiOverviewCollapseBtn" onclick="toggleAiOverviewCollapse()" class="text-gray-500 hover:text-gray-300 transition-colors" title="Collapse">
+                            <svg id="aiOverviewCollapseIcon" class="w-4 h-4 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
+                        </button>
+                    </div>
                 </div>
-                <div id="aiOverviewContent" class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap">
+                <div id="aiOverviewContent" class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap overflow-hidden transition-all duration-200">
                     <p class="text-gray-500 text-center py-2">Waiting for AI analysis...</p>
                 </div>
             </div>
@@ -238,6 +243,13 @@
             document.getElementById('aiOverviewPanel').classList.add('hidden');
             document.getElementById('aiOverviewContent').innerHTML = '<p class="text-gray-500 text-center py-2">Waiting for AI analysis...</p>';
             document.getElementById('aiOverviewMeta').textContent = '';
+            aiOverviewCollapsed = false;
+            document.getElementById('aiOverviewContent').style.maxHeight = '';
+            document.getElementById('aiOverviewContent').style.opacity = '';
+            document.getElementById('aiOverviewContent').style.marginTop = '';
+            document.getElementById('aiOverviewContent').style.marginBottom = '';
+            document.getElementById('aiOverviewCollapseIcon').style.transform = 'rotate(0deg)';
+            document.getElementById('aiOverviewCollapseBtn').title = 'Collapse';
             setText('selectedLabel', '@' + username);
             setText('streamEarnings', '$0.00');
             setText('streamGiftCount', '0 gifts this stream');
@@ -884,6 +896,30 @@
                         delete transEl.dataset.pending;
                     }
                 }
+            }
+        }
+
+        let aiOverviewCollapsed = false;
+
+        function toggleAiOverviewCollapse() {
+            aiOverviewCollapsed = !aiOverviewCollapsed;
+            const content = document.getElementById('aiOverviewContent');
+            const icon = document.getElementById('aiOverviewCollapseIcon');
+            const btn = document.getElementById('aiOverviewCollapseBtn');
+            if (aiOverviewCollapsed) {
+                content.style.maxHeight = '0';
+                content.style.opacity = '0';
+                content.style.marginTop = '0';
+                content.style.marginBottom = '0';
+                icon.style.transform = 'rotate(180deg)';
+                btn.title = 'Expand';
+            } else {
+                content.style.maxHeight = '2000px';
+                content.style.opacity = '1';
+                content.style.marginTop = '';
+                content.style.marginBottom = '';
+                icon.style.transform = 'rotate(0deg)';
+                btn.title = 'Collapse';
             }
         }
 
