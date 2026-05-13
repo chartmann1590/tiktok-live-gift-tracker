@@ -9,22 +9,28 @@ class TranscriptionWorker:
 
     def __init__(self):
         model_size = os.environ.get("WHISPER_MODEL", "base")
-        device = os.environ.get("WHISPER_DEVICE", "cuda")
+        device = os.environ.get("WHISPER_DEVICE", "cuda").lower()
+
+        if device == "cpu":
+            attempts = [("cpu", "int8")]
+        else:
+            attempts = [
+                ("cuda", "float16"),
+                ("cuda", "int8_float16"),
+                ("cuda", "int8"),
+                ("cpu", "int8"),
+            ]
 
         self._model = None
-        loaded = False
-        for dev, ct in [("cuda", "int8"), ("cpu", "int8")]:
-            if dev == "cpu" and device != "cpu":
-                continue
+        for dev, ct in attempts:
             try:
-                print(f"[*] Loading Whisper model '{model_size}' on {dev} ({ct})...")
+                print(f"[*] Loading Whisper model '{model_size}' on {dev} ({ct})...", flush=True)
                 self._model = WhisperModel(model_size, device=dev, compute_type=ct)
-                loaded = True
-                print(f"[*] Whisper model loaded on {dev}.")
+                print(f"[*] Whisper model loaded on {dev} ({ct}).", flush=True)
                 break
             except Exception as e:
-                print(f"[!] {dev}/{ct} failed ({e}), trying next option...")
-        if not loaded:
+                print(f"[!] {dev}/{ct} failed ({e}), trying next option...", flush=True)
+        if self._model is None:
             raise RuntimeError("Failed to load Whisper model on any device")
 
         self._queue: queue.Queue = queue.Queue()

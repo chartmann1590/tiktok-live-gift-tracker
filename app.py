@@ -99,6 +99,10 @@ def init_db():
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE tracked_users ADD COLUMN auto_transcribe INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -217,35 +221,125 @@ def _get_tracked_users():
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT username, added_at FROM tracked_users ORDER BY added_at ASC"
+            "SELECT username, added_at, auto_transcribe FROM tracked_users ORDER BY added_at ASC"
         ).fetchall()
-        return [{"username": r["username"], "added_at": r["added_at"]} for r in rows]
+        return [
+            {
+                "username": r["username"],
+                "added_at": r["added_at"],
+                "auto_transcribe": bool(r["auto_transcribe"]),
+            }
+            for r in rows
+        ]
     finally:
         conn.close()
+
+
+def _set_auto_transcribe(username, enabled: bool):
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE tracked_users SET auto_transcribe = ? WHERE username = ?",
+            (1 if enabled else 0, username),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _is_auto_transcribe(username) -> bool:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT auto_transcribe FROM tracked_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return bool(row and row["auto_transcribe"])
+    finally:
+        conn.close()
+
+
+def _maybe_auto_transcribe(username):
+    """Start transcription for `username` if they're flagged auto_transcribe and live.
+
+    Priority rule: a flagged streamer preempts any currently-running transcription
+    UNLESS the user being transcribed is also flagged (equal priority — first wins).
+    Idempotent — safe to call multiple times.
+    """
+    global current_transcription_user
+    if not TRANSCRIBER_URL or not _is_auto_transcribe(username):
+        return
+    with active_lock:
+        info = active_listeners.get(username)
+        if not info or not info.get("live"):
+            return
+        if current_transcription_user == username:
+            return  # already transcribing this user
+        prev_user = current_transcription_user
+        stream_id = info.get("stream_id") or "unknown"
+        room_id = info.get("stream_id")
+        cached_stream_url = info.get("stream_url")
+
+    if prev_user and _is_auto_transcribe(prev_user):
+        # Currently-transcribed user is also flagged → equal priority, don't preempt.
+        return
+
+    stream_url = cached_stream_url
+    if not stream_url and room_id:
+        stream_url = _fetch_fresh_stream_url(room_id)
+    if not stream_url:
+        print(f"[!] auto-transcribe: no stream URL for @{username} (room_id={room_id})")
+        return
+
+    if prev_user:
+        print(f"[*] auto-transcribe priority: preempting @{prev_user} for @{username}")
+        _stop_transcriber(prev_user)
+
+    with active_lock:
+        ok = _start_transcriber(username, stream_url, stream_id, target_lang=DEFAULT_TARGET_LANG)
+        if ok:
+            current_transcription_user = username
+            print(f"[*] auto-transcribe started for @{username}")
+        else:
+            if current_transcription_user == prev_user:
+                current_transcription_user = None
+            print(f"[!] auto-transcribe: transcriber refused start for @{username}")
 
 
 def _extract_stream_url(room_info):
     if not isinstance(room_info, dict):
         return None
+    stream_url = room_info.get("stream_url")
+    if not isinstance(stream_url, dict):
+        return None
     try:
-        stream_url = room_info.get("stream_url")
-        if not stream_url:
-            return None
         pull_data = stream_url.get("live_core_sdk_data", {}).get("pull_data", {})
         stream_data_str = pull_data.get("stream_data")
-        if not stream_data_str:
-            return None
-        stream_data = json.loads(stream_data_str)
-        data = stream_data.get("data", {})
-        for quality in ("ld", "sd", "hd", "uhd", "origin"):
-            quality_data = data.get(quality, {})
-            main = quality_data.get("main", {})
-            for fmt in ("flv", "hls"):
-                url = main.get(fmt)
-                if url:
-                    return url
+        if stream_data_str:
+            stream_data = json.loads(stream_data_str)
+            data = stream_data.get("data", {})
+            for quality in ("origin", "uhd", "hd", "sd", "ld"):
+                main = data.get(quality, {}).get("main", {})
+                for fmt in ("flv", "hls"):
+                    url = main.get(fmt)
+                    if isinstance(url, str) and url:
+                        return url
     except Exception:
         pass
+    # Older shape: flv_pull_url dict / hls_pull_url string / rtmp_pull_url string
+    flv = stream_url.get("flv_pull_url")
+    if isinstance(flv, dict):
+        for key in ("FULL_HD1", "HD1", "SD1", "SD2", "ORIGIN"):
+            v = flv.get(key)
+            if isinstance(v, str) and v:
+                return v
+        for v in flv.values():
+            if isinstance(v, str) and v:
+                return v
+    for key in ("hls_pull_url", "rtmp_pull_url"):
+        v = stream_url.get(key)
+        if isinstance(v, str) and v:
+            return v
     return None
 
 
@@ -261,22 +355,33 @@ def _fetch_fresh_stream_url(room_id):
             },
             timeout=10,
         )
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-        return _extract_stream_url(data)
+        if resp.status_code >= 400:
+            print(f"[!] webcast room/info {resp.status_code} for room {room_id}: {resp.text[:200]}")
+            return None
+        body = resp.json() or {}
+        data = body.get("data") or {}
+        url = _extract_stream_url(data)
+        if not url:
+            print(f"[!] webcast room/info returned no stream_url keys for room {room_id} (status_code={body.get('status_code')}, message={body.get('message')!r})")
+        return url
     except Exception as e:
         print(f"[!] Failed to fetch fresh stream URL: {e}")
         return None
 
 
-def _start_transcriber(username, stream_url, stream_id):
+def _start_transcriber(username, stream_url, stream_id, target_lang=None):
     if not TRANSCRIBER_URL:
         return False
     try:
         resp = http_requests.post(
             f"{TRANSCRIBER_URL}/api/start",
-            json={"username": username, "stream_url": stream_url, "stream_id": stream_id},
-            timeout=30,
+            json={
+                "username": username,
+                "stream_url": stream_url,
+                "stream_id": stream_id,
+                "target_lang": (target_lang or DEFAULT_TARGET_LANG),
+            },
+            timeout=180,
         )
         if resp.status_code >= 400:
             print(f"[!] Transcriber start failed ({resp.status_code}): {resp.text}")
@@ -342,6 +447,51 @@ def _upsert_summary(username, stream_id, summary_type, summary_text, analyzed_co
         conn.close()
 
 
+def _fetch_transcripts_for_summary(username, stream_id, limit):
+    """Pull transcript rows from the transcriber service for use in AI summaries.
+    Returns rows with timestamp + a best-language text (translated when available,
+    falling back to original). Returns [] on any failure — summary still runs chat-only.
+    """
+    if not TRANSCRIBER_URL:
+        return []
+    try:
+        resp = http_requests.get(
+            f"{TRANSCRIBER_URL}/api/transcripts/{username}",
+            params={"stream_id": stream_id, "limit": limit},
+            timeout=10,
+        )
+        if not resp.ok:
+            return []
+        return resp.json() or []
+    except Exception:
+        return []
+
+
+def _format_transcript_for_prompt(transcripts):
+    """One line per chunk: '[HH:MM:SS] text'. Prefers translated_text, falls back to original."""
+    lines = []
+    for t in transcripts:
+        text = (t.get("translated_text") or t.get("original_text") or "").strip()
+        if not text:
+            continue
+        ts = (t.get("timestamp") or "")[11:19] or t.get("timestamp", "")
+        lines.append(f"[{ts}] {text}")
+    return "\n".join(lines)
+
+
+def _build_summary_user_message(username, stream_id, chat_text, transcript_text):
+    sections = [f"Here is data from @{username}'s TikTok livestream (stream ID: {stream_id})."]
+    if transcript_text:
+        sections.append(
+            "STREAMER'S SPEECH (audio transcript, English translation when not already English):\n"
+            + transcript_text
+        )
+    else:
+        sections.append("STREAMER'S SPEECH: (no audio transcript available for this stream)")
+    sections.append("VIEWER CHAT MESSAGES:\n" + chat_text)
+    return "\n\n".join(sections)
+
+
 def _ollama_live_overview_loop():
     while True:
         time.sleep(60)
@@ -362,8 +512,10 @@ def _ollama_live_overview_loop():
                     ).fetchall()
                 finally:
                     conn.close()
-                if not rows:
+                transcripts = _fetch_transcripts_for_summary(uname, sid, limit=200)
+                if not rows and not transcripts:
                     continue
+                combined_count = len(rows) + len(transcripts)
                 existing = None
                 conn2 = get_db()
                 try:
@@ -374,21 +526,25 @@ def _ollama_live_overview_loop():
                     existing = row["analyzed_count"] if row else None
                 finally:
                     conn2.close()
-                if existing is not None and len(rows) <= existing:
+                if existing is not None and combined_count <= existing:
                     continue
                 chat_text = "\n".join(
                     f"{r['sender']}: {r['message']}" for r in reversed(rows)
-                )
+                ) or "(no chat messages yet)"
+                transcript_text = _format_transcript_for_prompt(transcripts)
                 summary = _query_ollama(
-                    "You are an assistant that analyzes livestream chat logs. "
-                    "Provide a concise overview (2-3 paragraphs) of the chat: "
-                    "main topics being discussed, overall viewer sentiment and energy, "
-                    "notable interactions, and any recurring themes. "
-                    "Be specific and reference actual messages where relevant.",
-                    f"Here are recent chat messages from @{uname}'s TikTok livestream (stream ID: {sid}):\n\n{chat_text}",
+                    "You are an assistant that analyzes TikTok livestreams. "
+                    "You receive two data streams: the streamer's own speech (audio transcript, "
+                    "translated to English when needed) and the viewers' chat messages. "
+                    "Provide a concise overview (2-3 paragraphs) covering: what the streamer is "
+                    "doing/saying, how viewers are reacting, main topics, overall sentiment and "
+                    "energy, and notable interactions. Treat the transcript as the streamer's side "
+                    "and chat as the audience's side — together they tell the full story. "
+                    "Be specific and reference actual content where relevant.",
+                    _build_summary_user_message(uname, sid, chat_text, transcript_text),
                 )
                 if summary:
-                    _upsert_summary(uname, sid, "live_overview", summary, len(rows))
+                    _upsert_summary(uname, sid, "live_overview", summary, combined_count)
             except Exception:
                 pass
 
@@ -405,21 +561,27 @@ def _ollama_full_summary(username, stream_id):
             ).fetchall()
         finally:
             conn.close()
-        if not rows:
+        transcripts = _fetch_transcripts_for_summary(username, stream_id, limit=500)
+        if not rows and not transcripts:
             return
         chat_text = "\n".join(
             f"{r['sender']}: {r['message']}" for r in rows
-        )
+        ) or "(no chat messages recorded)"
+        transcript_text = _format_transcript_for_prompt(transcripts)
         summary = _query_ollama(
-            "You are an assistant that analyzes livestream chat logs. "
-            "Provide a comprehensive summary of the entire stream chat including: "
-            "main topics discussed, overall viewer sentiment, most active participants, "
-            "key moments or highlights, recurring themes, and notable interactions. "
-            "Be thorough but well-organized. Use paragraphs and bullet points where helpful.",
-            f"Here is the complete chat log from @{username}'s TikTok livestream (stream ID: {stream_id}):\n\n{chat_text}",
+            "You are an assistant that analyzes TikTok livestreams. "
+            "You receive two data streams: the streamer's own speech (audio transcript, "
+            "translated to English when needed) and the viewers' chat messages. "
+            "Provide a comprehensive end-of-stream summary covering: what the streamer "
+            "talked about and did, main topics discussed, overall viewer sentiment, most "
+            "active participants, key moments or highlights, recurring themes, and how "
+            "the audience engaged with what the streamer was saying. Use the transcript "
+            "to ground claims about the streamer's actual words. Be thorough but "
+            "well-organized — use paragraphs and bullet points where helpful.",
+            _build_summary_user_message(username, stream_id, chat_text, transcript_text),
         )
         if summary:
-            _upsert_summary(username, stream_id, "full_summary", summary, len(rows))
+            _upsert_summary(username, stream_id, "full_summary", summary, len(rows) + len(transcripts))
     except Exception:
         pass
 
@@ -480,6 +642,11 @@ async def _run_listener(username: str):
                                 active_listeners[username]["stream_url"] = stream_url
             except Exception:
                 pass
+            # Auto-transcribe trigger: fire in a background thread so we don't
+            # block the asyncio event loop on the transcriber HTTP call.
+            threading.Thread(
+                target=_maybe_auto_transcribe, args=(username,), daemon=True
+            ).start()
 
         @client.on(DisconnectEvent)
         async def on_disconnect(event: DisconnectEvent):
@@ -775,6 +942,30 @@ def api_tracked():
     return jsonify(tracked)
 
 
+@app.route("/api/tracked/<username>/auto_transcribe", methods=["PUT"])
+def api_set_auto_transcribe(username):
+    username = normalize_username(username)
+    body = request.get_json(silent=True) or {}
+    enabled = bool(body.get("enabled"))
+
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM tracked_users WHERE username = ?", (username,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return jsonify({"error": f"Not tracking @{username}"}), 404
+
+    _set_auto_transcribe(username, enabled)
+    if enabled:
+        threading.Thread(
+            target=_maybe_auto_transcribe, args=(username,), daemon=True
+        ).start()
+    return jsonify({"username": username, "auto_transcribe": enabled})
+
+
 @app.route("/api/status/<username>")
 def api_status(username):
     username = normalize_username(username)
@@ -905,9 +1096,10 @@ def api_gifts(username):
 @app.route("/api/streams/<username>")
 def api_streams(username):
     username = normalize_username(username)
+    streams: dict[str, dict] = {}
     conn = get_db()
     try:
-        rows = conn.execute(
+        for r in conn.execute(
             """
             SELECT stream_id,
                    MIN(timestamp) AS started_at,
@@ -919,13 +1111,61 @@ def api_streams(username):
             FROM gifts
             WHERE username = ?
             GROUP BY stream_id
-            ORDER BY MIN(timestamp) DESC
             """,
             (username,),
-        ).fetchall()
-        return jsonify([dict(r) for r in rows])
+        ).fetchall():
+            streams[r["stream_id"]] = dict(r)
+        for r in conn.execute(
+            """
+            SELECT stream_id,
+                   MIN(timestamp) AS chat_started_at,
+                   MAX(timestamp) AS last_chat_at,
+                   COUNT(*) AS chat_count
+            FROM chat_messages
+            WHERE username = ?
+            GROUP BY stream_id
+            """,
+            (username,),
+        ).fetchall():
+            s = streams.setdefault(r["stream_id"], {"stream_id": r["stream_id"]})
+            s["chat_started_at"] = r["chat_started_at"]
+            s["last_chat_at"] = r["last_chat_at"]
+            s["chat_count"] = r["chat_count"]
     finally:
         conn.close()
+
+    if TRANSCRIBER_URL:
+        try:
+            resp = http_requests.get(
+                f"{TRANSCRIBER_URL}/api/transcripts/{username}/streams",
+                timeout=10,
+            )
+            if resp.ok:
+                for r in resp.json() or []:
+                    sid = r.get("stream_id")
+                    if not sid:
+                        continue
+                    s = streams.setdefault(sid, {"stream_id": sid})
+                    s["transcript_started_at"] = r.get("started_at")
+                    s["last_transcript_at"] = r.get("last_transcript_at")
+                    s["transcript_count"] = r.get("transcript_count")
+        except Exception:
+            pass
+
+    out = []
+    for s in streams.values():
+        s.setdefault(
+            "started_at",
+            s.get("chat_started_at") or s.get("transcript_started_at"),
+        )
+        s.setdefault("last_gift_at", None)
+        s.setdefault("gift_count", 0)
+        s.setdefault("total_diamonds", 0)
+        s.setdefault("total_usd", 0)
+        s.setdefault("unique_senders", 0)
+        out.append(s)
+    out.sort(key=lambda x: (x.get("started_at") or ""), reverse=True)
+    return jsonify(out)
 
 
 @app.route("/api/top-gifters/<username>")
@@ -1134,6 +1374,9 @@ def api_transcribe_start(username):
     if not TRANSCRIBER_URL:
         return jsonify({"error": "Transcription service is not configured"}), 503
 
+    body = request.get_json(silent=True) or {}
+    target_lang = (body.get("target_lang") or DEFAULT_TARGET_LANG or "en").strip() or "en"
+
     with active_lock:
         info = active_listeners.get(username)
         if not info:
@@ -1142,22 +1385,28 @@ def api_transcribe_start(username):
             return jsonify({"error": f"@{username} is not currently live"}), 400
         stream_id = info.get("stream_id") or "unknown"
         room_id = info.get("stream_id")
+        cached_stream_url = info.get("stream_url")
 
-    stream_url = _fetch_fresh_stream_url(room_id) if room_id else None
+    stream_url = cached_stream_url
+    if not stream_url and room_id:
+        stream_url = _fetch_fresh_stream_url(room_id)
     if not stream_url:
-        return jsonify({"error": "Could not get a fresh stream URL. Make sure the user is live and try again."}), 400
+        print(f"[!] No stream URL for @{username} (room_id={room_id}, cached={bool(cached_stream_url)})")
+        return jsonify({
+            "error": "Could not get a stream URL. The TikTok room info endpoint may be rate-limiting us. Wait a few seconds and try again, or restart the listener for this user."
+        }), 400
 
     with active_lock:
         if current_transcription_user and current_transcription_user != username:
             _stop_transcriber(current_transcription_user)
 
-        ok = _start_transcriber(username, stream_url, stream_id)
+        ok = _start_transcriber(username, stream_url, stream_id, target_lang=target_lang)
         if not ok:
             return jsonify({"error": "Transcription service failed to start (check transcriber logs)"}), 502
 
         current_transcription_user = username
 
-    return jsonify({"status": "started", "username": username})
+    return jsonify({"status": "started", "username": username, "target_lang": target_lang})
 
 
 @app.route("/api/transcribe/<username>", methods=["DELETE"])

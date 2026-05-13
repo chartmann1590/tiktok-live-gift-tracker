@@ -31,6 +31,7 @@
         .scroll-area::-webkit-scrollbar { width: 6px; }
         .scroll-area::-webkit-scrollbar-track { background: #1f2937; }
         .scroll-area::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+        .transcript-feed.hide-translations .transcript-translation { display: none; }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
@@ -137,14 +138,14 @@
                                 <h2 class="text-base font-semibold">Live Transcript <span id="transcriptLangBadge" class="text-gray-500 font-normal text-xs"></span></h2>
                             </div>
                             <div class="flex items-center gap-3">
-                                <label class="flex items-center gap-1.5 cursor-pointer select-none" title="Auto-translate transcript entries">
-                                    <input type="checkbox" id="transcriptTranslateToggle" class="sr-only peer">
+                                <label class="flex items-center gap-1.5 cursor-pointer select-none" title="Show translation under each transcript line">
+                                    <input type="checkbox" id="transcriptTranslateToggle" class="sr-only peer" checked>
                                     <div class="relative w-8 h-4 bg-gray-700 rounded-full peer-checked:bg-tiktok-cyan/60 transition-colors after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-gray-400 after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:after:translate-x-4 peer-checked:after:bg-white"></div>
                                     <span class="text-xs text-gray-500 peer-checked:text-tiktok-cyan">Translate</span>
                                 </label>
                             </div>
                         </div>
-                        <div id="transcriptFeed" class="scroll-area max-h-80 overflow-y-auto space-y-1">
+                        <div id="transcriptFeed" class="transcript-feed scroll-area max-h-80 overflow-y-auto space-y-1">
                             <p class="text-gray-500 text-center py-6 text-sm">Transcription not active.</p>
                         </div>
                     </div>
@@ -569,6 +570,9 @@
             wrap.innerHTML =
                 avatar(u.avatar_url, u.username.charAt(0).toUpperCase(), 'w-7 h-7')
                 + '<div class="flex-1 min-w-0"><div class="t-name text-sm font-medium truncate"></div><div class="t-meta text-xs text-gray-500"></div></div>'
+                + '<button class="t-auto p-1 rounded transition-colors flex-shrink-0" title="Auto-transcribe when live">'
+                + '<svg class="t-auto-icon w-3.5 h-3.5 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 5l5 0M5 5v10a2 2 0 002 2h2v4l3-4h5a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2z M9 9h6 M9 12h4"/></svg>'
+                + '</button>'
                 + '<button class="t-transcribe hidden px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors flex-shrink-0" title="Start audio transcription">'
                 + '<svg class="w-3 h-3 pointer-events-none inline -mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>'
                 + ' <span class="pointer-events-none">Transcribe</span></button>'
@@ -576,7 +580,7 @@
                 + '<button class="t-close text-gray-600 hover:text-red-400 transition-colors flex-shrink-0" title="Stop tracking"><svg class="w-4 h-4 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
             wrap.querySelector('.t-name').textContent = u.username;
             wrap.addEventListener('click', e => {
-                if (e.target.closest('.t-live') || e.target.closest('.t-close') || e.target.closest('.t-transcribe')) return;
+                if (e.target.closest('.t-live') || e.target.closest('.t-close') || e.target.closest('.t-transcribe') || e.target.closest('.t-auto')) return;
                 selectUser(u.username);
             });
             wrap.querySelector('.t-close').addEventListener('click', e => {
@@ -587,11 +591,31 @@
                 e.stopPropagation();
                 toggleTranscription(u.username);
             });
+            wrap.querySelector('.t-auto').addEventListener('click', e => {
+                e.stopPropagation();
+                toggleAutoTranscribe(u.username, !u.auto_transcribe);
+            });
             const liveLink = wrap.querySelector('.t-live');
             if (u.live_url) liveLink.href = u.live_url;
             else liveLink.removeAttribute('href');
             updateTrackedItem(wrap, u);
             return wrap;
+        }
+
+        async function toggleAutoTranscribe(username, enabled) {
+            try {
+                const resp = await fetch('/api/tracked/' + username + '/auto_transcribe', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                const data = await resp.json();
+                if (!resp.ok) { showToast(data.error || 'Failed', 'error'); return; }
+                showToast((enabled ? 'Auto-transcribe ON for @' : 'Auto-transcribe OFF for @') + username, enabled ? 'success' : 'info');
+                refreshTracked();
+            } catch (e) {
+                showToast('Network error: ' + e.message, 'error');
+            }
         }
 
         function updateTrackedItem(node, u) {
@@ -600,6 +624,18 @@
             node.classList.toggle('border-gray-800', !isSel);
             const liveLink = node.querySelector('.t-live');
             const transcribeBtn = node.querySelector('.t-transcribe');
+            const autoBtn = node.querySelector('.t-auto');
+            if (autoBtn) {
+                if (u.auto_transcribe) {
+                    autoBtn.classList.remove('text-gray-600', 'hover:text-gray-300');
+                    autoBtn.classList.add('text-amber-400', 'bg-amber-500/15', 'hover:bg-amber-500/25');
+                    autoBtn.title = 'Auto-transcribe ON — click to disable';
+                } else {
+                    autoBtn.classList.remove('text-amber-400', 'bg-amber-500/15', 'hover:bg-amber-500/25');
+                    autoBtn.classList.add('text-gray-600', 'hover:text-gray-300');
+                    autoBtn.title = 'Auto-transcribe OFF — click to enable (priority over manual)';
+                }
+            }
             if (u.live && u.live_url) {
                 liveLink.href = u.live_url;
                 liveLink.classList.remove('hidden');
@@ -1050,10 +1086,6 @@
             }
         });
 
-        let transcriptTranslateEnabled = false;
-        let transcriptTranslationCache = new Map();
-        let transcriptTranslationQueue = [];
-        let transcriptTranslationInProgress = false;
         let lastTranscriptLang = '';
 
         async function toggleTranscription(username) {
@@ -1105,7 +1137,6 @@
                 if (!resp.ok) return;
                 const data = await resp.json();
                 renderTranscriptFeed(data);
-                if (transcriptTranslateEnabled) scheduleTranscriptTranslations();
             } catch (e) {}
         }
 
@@ -1131,115 +1162,34 @@
         function buildTranscriptEntry(t) {
             const div = document.createElement('div');
             div.className = 'px-2 py-1.5 rounded hover:bg-gray-800/40 text-sm border-l-2 border-amber-400/30';
+            const tr = t.translated_text || '';
             div.innerHTML =
                 '<div class="flex items-start gap-2">'
                 + '<span class="text-gray-500 flex-shrink-0 text-xs mt-0.5">' + esc(fmtTs(t.timestamp)) + '</span>'
                 + '<span class="text-gray-300 break-all transcript-original">' + esc(t.original_text) + '</span>'
                 + '</div>'
-                + '<div class="transcript-translation hidden text-xs text-tiktok-cyan/70 pl-[calc(0.5rem+0px)] pt-0.5 italic"></div>';
+                + '<div class="transcript-translation text-xs text-tiktok-cyan/70 pl-2 pt-0.5 italic'
+                + (tr ? '' : ' hidden') + '">' + esc(tr) + '</div>';
             return div;
         }
 
-        function updateTranscriptEntry(node, t) {}
-
-        function scheduleTranscriptTranslations() {
-            if (!transcriptTranslateEnabled || transcriptTranslationInProgress) return;
-            const sel = document.getElementById('translateTargetLang');
-            const targetLang = sel.value;
-            if (!targetLang) return;
-
-            const feed = document.getElementById('transcriptFeed');
-            if (!feed._kidMap) return;
-
-            const items = [];
-            for (const [, node] of feed._kidMap) {
-                const textEl = node.querySelector('.transcript-original');
-                if (!textEl) continue;
-                const text = textEl.textContent;
-                const key = targetLang + ':t:' + text;
-                const transEl = node.querySelector('.transcript-translation');
-                if (transcriptTranslationCache.has(key)) {
-                    if (transEl && !transEl.dataset.loaded) {
-                        transEl.textContent = transcriptTranslationCache.get(key);
-                        transEl.classList.remove('hidden');
-                        transEl.dataset.loaded = '1';
-                    }
-                    continue;
-                }
-                if (transEl && transEl.dataset.pending) continue;
-                items.push({ text, node, key });
-                if (items.length >= 5) break;
+        function updateTranscriptEntry(node, t) {
+            if (!t.translated_text) return;
+            const tEl = node.querySelector('.transcript-translation');
+            if (tEl && !tEl.textContent) {
+                tEl.textContent = t.translated_text;
+                tEl.classList.remove('hidden');
             }
+        }
 
-            if (items.length === 0) return;
-            items.forEach(m => {
-                const transEl = m.node.querySelector('.transcript-translation');
-                if (transEl) transEl.dataset.pending = '1';
+        function applyTranscriptTranslateVisibility() {
+            const show = document.getElementById('transcriptTranslateToggle').checked;
+            document.querySelectorAll('.transcript-feed').forEach(el => {
+                el.classList.toggle('hide-translations', !show);
             });
-            translateTranscriptBatch(items, targetLang);
         }
 
-        async function translateTranscriptBatch(items, targetLang) {
-            transcriptTranslationInProgress = true;
-            try {
-                for (const m of items) {
-                    const transEl = m.node.querySelector('.transcript-translation');
-                    try {
-                        const resp = await fetch('/api/translate', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ text: m.text, target_lang: targetLang, source_lang: 'auto' })
-                        });
-                        let data;
-                        try { data = await resp.json(); } catch (e) { if (transEl) delete transEl.dataset.pending; continue; }
-                        if (!resp.ok || data.error) { if (transEl) delete transEl.dataset.pending; continue; }
-                        const translated = data.translated_text || '';
-                        transcriptTranslationCache.set(m.key, translated);
-                        if (transEl && translated) {
-                            transEl.textContent = translated;
-                            transEl.classList.remove('hidden');
-                            transEl.dataset.loaded = '1';
-                        }
-                        if (transEl) delete transEl.dataset.pending;
-                    } catch (e) {
-                        if (transEl) delete transEl.dataset.pending;
-                    }
-                }
-            } finally {
-                transcriptTranslationInProgress = false;
-                scheduleTranscriptTranslations();
-            }
-        }
-
-        function clearTranscriptTranslations() {
-            const feed = document.getElementById('transcriptFeed');
-            if (feed._kidMap) {
-                for (const [, node] of feed._kidMap) {
-                    const transEl = node.querySelector('.transcript-translation');
-                    if (transEl) {
-                        transEl.textContent = '';
-                        transEl.classList.add('hidden');
-                        delete transEl.dataset.loaded;
-                        delete transEl.dataset.pending;
-                    }
-                }
-            }
-        }
-
-        document.getElementById('transcriptTranslateToggle').addEventListener('change', function() {
-            transcriptTranslateEnabled = this.checked;
-            if (transcriptTranslateEnabled) {
-                scheduleTranscriptTranslations();
-            } else {
-                clearTranscriptTranslations();
-            }
-        });
-
-        document.getElementById('translateTargetLang').addEventListener('change', function() {
-            transcriptTranslationCache.clear();
-            clearTranscriptTranslations();
-            if (transcriptTranslateEnabled) scheduleTranscriptTranslations();
-        });
+        document.getElementById('transcriptTranslateToggle').addEventListener('change', applyTranscriptTranslateVisibility);
 
         async function toggleStreamTranscript(username, streamId, btn) {
             const container = btn.closest('.bg-gray-800\\/40').querySelector('.stream-transcript');
@@ -1259,12 +1209,18 @@
                 } else if (data.length === 0) {
                     container.innerHTML = '<p class="text-gray-500 text-sm py-2">No transcript available for this stream.</p>';
                 } else {
+                    const showTrans = document.getElementById('transcriptTranslateToggle').checked;
                     container.innerHTML =
-                        '<div class="scroll-area max-h-60 overflow-y-auto space-y-1">'
-                        + data.map(t => '<div class="flex items-start gap-1.5 px-1.5 py-0.5 text-xs border-l-2 border-amber-400/20">'
-                        + '<span class="text-gray-600 flex-shrink-0">' + esc(fmtTs(t.timestamp)) + '</span>'
-                        + '<span class="text-gray-400 break-all">' + esc(t.original_text) + '</span>'
-                        + (t.detected_language ? '<span class="text-gray-600 flex-shrink-0">(' + esc(t.detected_language) + ')</span>' : '')
+                        '<div class="transcript-feed scroll-area max-h-60 overflow-y-auto space-y-1' + (showTrans ? '' : ' hide-translations') + '">'
+                        + data.map(t => '<div class="px-1.5 py-0.5 text-xs border-l-2 border-amber-400/20">'
+                          + '<div class="flex items-start gap-1.5">'
+                            + '<span class="text-gray-600 flex-shrink-0">' + esc(fmtTs(t.timestamp)) + '</span>'
+                            + '<span class="text-gray-400 break-all transcript-original">' + esc(t.original_text) + '</span>'
+                            + (t.detected_language ? '<span class="text-gray-600 flex-shrink-0">(' + esc(t.detected_language) + ')</span>' : '')
+                          + '</div>'
+                          + (t.translated_text
+                              ? '<div class="transcript-translation text-tiktok-cyan/70 italic pl-2 pt-0.5">' + esc(t.translated_text) + '</div>'
+                              : '')
                         + '</div>').join('')
                         + '</div>';
                 }
