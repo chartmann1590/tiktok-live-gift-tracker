@@ -8,9 +8,32 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       DATA_DIR: /app/data
+      TRANSCRIBER_URL: http://tiktok-transcriber:5001
     volumes:
       - tiktok_monitor_data:/app/data
     restart: unless-stopped
 
+  tiktok-transcriber:
+    build: ./transcriber
+    ports:
+      - "5001:5001"
+    environment:
+      DATA_DIR: /app/data
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cuda}
+      TRANSCRIPT_CHUNK_SECONDS: ${TRANSCRIPT_CHUNK_SECONDS:-30}
+      TRANSCRIBER_PORT: "5001"
+    volumes:
+      - tiktok_transcriber_data:/app/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
 volumes:
   tiktok_monitor_data:
+  tiktok_transcriber_data:

@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import threading
@@ -44,6 +45,8 @@ LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2")
 
+TRANSCRIBER_URL = os.environ.get("TRANSCRIBER_URL", "").rstrip("/")
+
 _translate_languages_cache = None
 _translate_lang_lock = threading.Lock()
 
@@ -53,6 +56,7 @@ active_lock = threading.Lock()
 active_listeners: dict[str, dict] = {}
 streamer_avatars: dict[str, str] = {}
 sender_avatars: dict[str, str] = {}
+current_transcription_user: str | None = None
 
 
 def get_db():
@@ -218,6 +222,82 @@ def _get_tracked_users():
         return [{"username": r["username"], "added_at": r["added_at"]} for r in rows]
     finally:
         conn.close()
+
+
+def _extract_stream_url(room_info):
+    if not isinstance(room_info, dict):
+        return None
+    try:
+        stream_url = room_info.get("stream_url")
+        if not stream_url:
+            return None
+        pull_data = stream_url.get("live_core_sdk_data", {}).get("pull_data", {})
+        stream_data_str = pull_data.get("stream_data")
+        if not stream_data_str:
+            return None
+        stream_data = json.loads(stream_data_str)
+        data = stream_data.get("data", {})
+        for quality in ("ld", "sd", "hd", "uhd", "origin"):
+            quality_data = data.get(quality, {})
+            main = quality_data.get("main", {})
+            for fmt in ("flv", "hls"):
+                url = main.get(fmt)
+                if url:
+                    return url
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_fresh_stream_url(room_id):
+    try:
+        resp = http_requests.get(
+            "https://webcast.tiktok.com/webcast/room/info/",
+            params={"room_id": room_id},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+                "Referer": "https://www.tiktok.com/",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", {})
+        return _extract_stream_url(data)
+    except Exception as e:
+        print(f"[!] Failed to fetch fresh stream URL: {e}")
+        return None
+
+
+def _start_transcriber(username, stream_url, stream_id):
+    if not TRANSCRIBER_URL:
+        return False
+    try:
+        resp = http_requests.post(
+            f"{TRANSCRIBER_URL}/api/start",
+            json={"username": username, "stream_url": stream_url, "stream_id": stream_id},
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            print(f"[!] Transcriber start failed ({resp.status_code}): {resp.text}")
+            return False
+        return True
+    except Exception as e:
+        print(f"[!] Transcriber unreachable: {e}")
+        return False
+
+
+def _stop_transcriber(username):
+    if not TRANSCRIBER_URL:
+        return
+    try:
+        http_requests.post(
+            f"{TRANSCRIBER_URL}/api/stop",
+            json={"username": username},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 def _query_ollama(system_prompt: str, chat_text: str) -> str | None:
@@ -393,20 +473,35 @@ async def _run_listener(username: str):
                                         break
                             if username in streamer_avatars:
                                 break
+                    stream_url = _extract_stream_url(ri)
+                    if stream_url:
+                        with active_lock:
+                            if username in active_listeners:
+                                active_listeners[username]["stream_url"] = stream_url
             except Exception:
                 pass
 
         @client.on(DisconnectEvent)
         async def on_disconnect(event: DisconnectEvent):
+            _stop_transcriber(username)
             with active_lock:
+                global current_transcription_user
+                if current_transcription_user == username:
+                    current_transcription_user = None
                 if username in active_listeners:
                     active_listeners[username]["live"] = False
+                    active_listeners[username]["stream_url"] = None
 
         @client.on(LiveEndEvent)
         async def on_live_end(event: LiveEndEvent):
+            _stop_transcriber(username)
             with active_lock:
+                global current_transcription_user
+                if current_transcription_user == username:
+                    current_transcription_user = None
                 if username in active_listeners:
                     active_listeners[username]["live"] = False
+                    active_listeners[username]["stream_url"] = None
 
         @client.on(GiftEvent)
         async def on_gift(event: GiftEvent):
@@ -579,11 +674,15 @@ def _thread_entry(username: str):
 
 
 def stop_listener(username: str) -> bool:
+    global current_transcription_user
     with active_lock:
         info = active_listeners.get(username)
         if info is None:
             return False
         info["stopping"] = True
+        _stop_transcriber(username)
+        if current_transcription_user == username:
+            current_transcription_user = None
         if info.get("thread") is None:
             active_listeners.pop(username, None)
             return True
@@ -1026,6 +1125,105 @@ def api_translate_languages():
             return jsonify(_translate_languages_cache)
         except http_requests.RequestException as e:
             return jsonify({"error": f"Failed to fetch languages: {str(e)}"}), 502
+
+
+@app.route("/api/transcribe/<username>", methods=["POST"])
+def api_transcribe_start(username):
+    global current_transcription_user
+    username = normalize_username(username)
+    if not TRANSCRIBER_URL:
+        return jsonify({"error": "Transcription service is not configured"}), 503
+
+    with active_lock:
+        info = active_listeners.get(username)
+        if not info:
+            return jsonify({"error": f"Not tracking @{username}"}), 404
+        if not info.get("live"):
+            return jsonify({"error": f"@{username} is not currently live"}), 400
+        stream_id = info.get("stream_id") or "unknown"
+        room_id = info.get("stream_id")
+
+    stream_url = _fetch_fresh_stream_url(room_id) if room_id else None
+    if not stream_url:
+        return jsonify({"error": "Could not get a fresh stream URL. Make sure the user is live and try again."}), 400
+
+    with active_lock:
+        if current_transcription_user and current_transcription_user != username:
+            _stop_transcriber(current_transcription_user)
+
+        ok = _start_transcriber(username, stream_url, stream_id)
+        if not ok:
+            return jsonify({"error": "Transcription service failed to start (check transcriber logs)"}), 502
+
+        current_transcription_user = username
+
+    return jsonify({"status": "started", "username": username})
+
+
+@app.route("/api/transcribe/<username>", methods=["DELETE"])
+def api_transcribe_stop(username):
+    global current_transcription_user
+    username = normalize_username(username)
+    with active_lock:
+        if current_transcription_user == username:
+            current_transcription_user = None
+    _stop_transcriber(username)
+    return jsonify({"status": "stopped", "username": username})
+
+
+@app.route("/api/transcribe/status")
+def api_transcribe_status():
+    with active_lock:
+        user = current_transcription_user
+    if not user:
+        return jsonify({"active": False, "username": None})
+    info = active_listeners.get(user, {})
+    return jsonify({
+        "active": True,
+        "username": user,
+        "stream_id": info.get("stream_id"),
+        "configured": bool(TRANSCRIBER_URL),
+    })
+
+
+@app.route("/api/transcripts/<username>")
+def api_transcripts(username):
+    username = normalize_username(username)
+    if not TRANSCRIBER_URL:
+        return jsonify({"error": "Transcription service is not configured"}), 503
+    try:
+        params = {
+            "limit": request.args.get("limit", 50, type=int),
+            "offset": request.args.get("offset", 0, type=int),
+        }
+        stream_id = request.args.get("stream_id")
+        if stream_id:
+            params["stream_id"] = stream_id
+        resp = http_requests.get(
+            f"{TRANSCRIBER_URL}/api/transcripts/{username}",
+            params=params,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except http_requests.RequestException as e:
+        return jsonify({"error": f"Transcription service unavailable: {str(e)}"}), 502
+
+
+@app.route("/api/transcripts/<username>/streams")
+def api_transcript_streams(username):
+    username = normalize_username(username)
+    if not TRANSCRIBER_URL:
+        return jsonify({"error": "Transcription service is not configured"}), 503
+    try:
+        resp = http_requests.get(
+            f"{TRANSCRIBER_URL}/api/transcripts/{username}/streams",
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify(resp.json())
+    except http_requests.RequestException as e:
+        return jsonify({"error": f"Transcription service unavailable: {str(e)}"}), 502
 
 
 @app.route("/api/summary/<username>")
