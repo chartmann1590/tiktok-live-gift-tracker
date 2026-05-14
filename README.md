@@ -41,7 +41,12 @@ This project is **MIT-licensed and free to self-host** — no paywalls, no API k
 - **Dark mode dashboard** — clean Tailwind CSS UI with live status indicators
 - **Chat translation** — auto-translate chat messages via LibreTranslate with language auto-detection and user-selectable target language
 - **AI chat analysis** — periodic AI-powered chat overviews during live streams via Ollama, plus full stream summaries when a stream ends
+- **Live audio transcription** — optional Whisper-based transcriber service (Docker); transcript lines can be auto-translated with the same LibreTranslate instance used for chat
+- **Audience & engagement** — live viewer count, top viewers, recent joiners; persisted participants (comments, gifts, shares) and viewer-count history per stream
+- **Auto-transcribe** — per tracked user, start transcription automatically when they go live
 - **One-command deploy** — Docker Compose with persistent volume
+
+The self-hosted dashboard includes **Buy Me a Coffee** links in the header and footer so you can support ongoing development while you use the app.
 
 ## Quick Start
 
@@ -74,10 +79,16 @@ OLLAMA_BASE_URL=http://YOUR_OLLAMA_HOST:11434
 OLLAMA_MODEL=llama3.2
 ```
 
-Then start the app:
+### Docker Compose: main app and transcriber
+
+By default, Compose runs **two** services: `tiktok-monitor` (Flask dashboard on port **5000**) and `tiktok-transcriber` (Whisper on port **5001**). The transcriber is configured for an **NVIDIA GPU** (see `deploy.resources` in [`docker-compose.yml`](docker-compose.yml)). If you do not need live transcription or have no GPU, run only the web app; transcription in the UI requires a reachable transcriber at `TRANSCRIBER_URL` (set automatically when both services run).
 
 ```bash
+# Full stack (dashboard + GPU Whisper transcriber)
 docker compose up -d
+
+# Dashboard only (gifts, chat, AI, etc. — no Whisper)
+docker compose up -d tiktok-monitor
 ```
 
 Open [http://localhost:5000](http://localhost:5000) and enter a TikTok username.
@@ -104,7 +115,10 @@ Flask (web server, main thread)
 ├── Background Thread #2 (asyncio event loop)
 │   └── TikTokLiveClient("@user2") → GiftEvent + CommentEvent → SQLite INSERT
 │
-└── SQLite (WAL mode) — persistent gift + chat history
+├── tiktok-transcriber (optional, separate container)
+│   └── Whisper → transcript chunks → HTTP to Flask → SQLite (transcripts)
+│
+└── SQLite (WAL mode) — persistent gift, chat, transcript, audience samples
 ```
 
 **Gift streak handling:** TikTok gifts can be "streaked" (sent repeatedly). The app only records a gift when the streak ends to prevent double-counting.
@@ -117,7 +131,11 @@ Flask (web server, main thread)
 | `POST` | `/api/listen` | Start tracking a user |
 | `DELETE` | `/api/listen/<user>` | Stop tracking a user |
 | `GET` | `/api/tracked` | List all tracked users with stats |
+| `PUT` | `/api/tracked/<user>/auto_transcribe` | Enable or disable auto-start transcription when the user goes live (`{"enabled": true/false}`) |
 | `GET` | `/api/status/<user>` | Live/offline status |
+| `GET` | `/api/audience/<user>` | Live audience snapshot: viewer count, top viewers, recent joiners (in-memory when live) |
+| `GET` | `/api/audience/<user>/participants` | Engaged participants for a stream (comments, gifts, shares); optional `stream_id`, `limit` |
+| `GET` | `/api/audience/<user>/viewers` | Viewer-count time series for a stream; optional `stream_id`, `limit` |
 | `GET` | `/api/earnings/<user>` | Current stream, historical, and all-time earnings |
 | `GET` | `/api/gifts/<user>` | Gift feed (all time or per-stream) |
 | `GET` | `/api/streams/<user>` | All recorded streams with aggregated stats |
@@ -129,6 +147,11 @@ Flask (web server, main thread)
 | `GET` | `/api/translate/languages` | List supported translation languages |
 | `GET` | `/api/summary/<user>` | Latest AI live overview for current stream |
 | `GET` | `/api/summary/<user>/<stream_id>` | AI summary for a specific stream |
+| `POST` | `/api/transcribe/<user>` | Start audio transcription for the user’s current live stream |
+| `DELETE` | `/api/transcribe/<user>` | Stop transcription for that user |
+| `GET` | `/api/transcribe/status` | Which user/stream is being transcribed (if any) |
+| `GET` | `/api/transcripts/<user>` | Transcript lines; optional `stream_id`, `limit` |
+| `GET` | `/api/transcripts/<user>/streams` | Streams that have transcript data |
 
 ## Configuration
 
@@ -146,6 +169,10 @@ Copy `.env.template` to `.env` and customize. The file is gitignored so your val
 | `DATA_DIR` | `./data` | Directory for SQLite database files |
 | `PORT` | `5000` | Flask server port |
 | `DISABLE_TIKTOK_LISTENERS` | `false` | Set to `true` for demo/screenshot mode |
+| `TRANSCRIBER_URL` | _(set in compose)_ | Base URL of the Whisper HTTP service (e.g. `http://tiktok-transcriber:5001` inside Docker). Override for non-Docker setups. |
+| `WHISPER_MODEL` | `medium` | Whisper model size in the transcriber container (`tiny` / `base` / `small` / `medium` / `large-v3`) |
+| `WHISPER_DEVICE` | `cuda` | Device for Whisper in the transcriber (`cuda` or `cpu`) |
+| `TRANSCRIPT_CHUNK_SECONDS` | `30` | Audio chunk length for streaming transcription |
 
 ### Persistent Storage
 
@@ -167,6 +194,7 @@ Tracked users are saved in the database. When the container starts, it automatic
 
 - Docker & Docker Compose
 - No TikTok account, API keys, or login credentials needed
+- **Optional:** NVIDIA GPU with the NVIDIA Container Toolkit if you run the default `tiktok-transcriber` service for live transcription
 
 ## Tech Stack
 
@@ -174,6 +202,7 @@ Tracked users are saved in the database. When the container starts, it automatic
 - **TikTok Listener:** [TikTokLive](https://github.com/isaackogan/TikTokLive) by Isaac Kogan
 - **Database:** SQLite (WAL mode)
 - **Frontend:** Vanilla JS, Tailwind CSS (CDN)
+- **Transcription:** Whisper (optional `tiktok-transcriber` service)
 - **Deployment:** Docker
 
 ## License
