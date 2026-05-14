@@ -44,25 +44,45 @@ class TranscriptionWorker:
         self._queue.put(None)
 
     def _process_loop(self):
+        import time as _time
         while True:
             item = self._queue.get()
             if item is None:
                 break
 
             audio_path, username, stream_id, chunk_index, callback = item
+            qsize = self._queue.qsize()
+            start = _time.time()
             try:
+                # beam_size=5 for accuracy. condition_on_previous_text=False
+                # prevents the model from chaining hallucinations across the
+                # noisy/multilingual segments common in TikTok streams.
                 segments, info = self._model.transcribe(
                     audio_path,
                     beam_size=5,
                     vad_filter=True,
+                    condition_on_previous_text=False,
                 )
                 text = " ".join(seg.text.strip() for seg in segments).strip()
                 detected_language = getattr(info, "language", None) or "unknown"
 
+                elapsed = _time.time() - start
                 if text:
+                    print(
+                        f"[whisper] @{username} chunk={chunk_index} lang={detected_language} chars={len(text)} elapsed={elapsed:.2f}s queue={qsize}",
+                        flush=True,
+                    )
                     callback(username, stream_id, text, detected_language, chunk_index)
-            except Exception:
-                pass
+                else:
+                    print(
+                        f"[whisper] @{username} chunk={chunk_index} EMPTY (silent/non-speech) elapsed={elapsed:.2f}s queue={qsize}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(
+                    f"[whisper] @{username} chunk={chunk_index} ERROR {type(e).__name__}: {e}",
+                    flush=True,
+                )
             finally:
                 try:
                     os.remove(audio_path)

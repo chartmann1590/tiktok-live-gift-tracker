@@ -58,7 +58,14 @@ class AudioCaptureManager:
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-loglevel", "error",
+                "-loglevel", "warning",
+                # Reconnect on transport failures so a brief network blip
+                # doesn't kill the stream. rw_timeout is in microseconds.
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_delay_max", "5",
+                "-rw_timeout", "20000000",
                 "-i", self.stream_url,
                 "-vn",
                 "-acodec", "pcm_s16le",
@@ -68,6 +75,10 @@ class AudioCaptureManager:
                 "pipe:1",
             ]
 
+            print(
+                f"[capture] ffmpeg starting for @{self.username} stream={self.stream_id}",
+                flush=True,
+            )
             try:
                 self._process = subprocess.Popen(
                     cmd,
@@ -78,6 +89,10 @@ class AudioCaptureManager:
                 while not self._stopping:
                     audio_data = self._read_exact(self._process.stdout, self._chunk_bytes)
                     if not audio_data or len(audio_data) < SAMPLE_RATE * BYTES_PER_SAMPLE:
+                        print(
+                            f"[capture] ffmpeg returned only {len(audio_data) if audio_data else 0} bytes for @{self.username}; restarting",
+                            flush=True,
+                        )
                         break
 
                     chunk_path = os.path.join(
@@ -94,15 +109,22 @@ class AudioCaptureManager:
                         idx,
                         self._on_transcript,
                     )
+                    # Don't proactively delete on-disk chunks here: the worker
+                    # removes each WAV after processing. If Whisper falls behind,
+                    # an aggressive cleanup would erase queued chunks before
+                    # they're transcribed (silent data loss). The temp dir is
+                    # wiped wholesale in stop().
 
-                    self._cleanup_old_chunks()
+            except Exception as e:
+                print(f"[capture] ffmpeg loop error for @{self.username}: {e}", flush=True)
 
-            except Exception:
-                pass
-
-            self._process = None
+            self._kill_ffmpeg()
             if self._stopping:
                 break
+            print(
+                f"[capture] ffmpeg dead for @{self.username}; sleeping 5s before retry",
+                flush=True,
+            )
             time.sleep(5)
 
     def _read_exact(self, pipe, nbytes):
@@ -123,14 +145,3 @@ class AudioCaptureManager:
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(raw_pcm)
 
-    def _cleanup_old_chunks(self):
-        try:
-            entries = sorted(os.listdir(self._temp_dir))
-            while len(entries) > 10:
-                old = os.path.join(self._temp_dir, entries.pop(0))
-                try:
-                    os.remove(old)
-                except OSError:
-                    break
-        except Exception:
-            pass

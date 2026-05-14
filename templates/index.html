@@ -160,6 +160,41 @@
 
                 <div class="space-y-5">
                     <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4 text-tiktok-cyan" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 0a3 3 0 100-6 3 3 0 000 6zM5 11a3 3 0 100-6 3 3 0 000 6z"/></svg>
+                                <h2 class="text-base font-semibold">Audience</h2>
+                            </div>
+                            <div id="viewerCountWrap" class="hidden flex items-center gap-1.5 text-sm">
+                                <span class="relative flex h-2 w-2">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                                </span>
+                                <span id="viewerCount" class="font-bold text-white">0</span>
+                                <span class="text-gray-500 text-xs">watching</span>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="text-xs uppercase tracking-wide text-gray-500 mb-1.5">Top viewers <span class="text-gray-600 normal-case tracking-normal">(TikTok ranking, sparse on small streams)</span></div>
+                            <div id="topViewersList" class="scroll-area max-h-44 overflow-y-auto space-y-1">
+                                <p class="text-gray-600 text-xs py-2">Not live.</p>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <div class="text-xs uppercase tracking-wide text-gray-500 mb-1.5">Recently joined <span class="text-gray-600 normal-case tracking-normal">(while we've been watching)</span></div>
+                            <div id="joinersList" class="scroll-area max-h-44 overflow-y-auto space-y-1">
+                                <p class="text-gray-600 text-xs py-2">No joins yet.</p>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="text-xs uppercase tracking-wide text-gray-500 mb-1.5">Engaged <span class="text-gray-600 normal-case tracking-normal">(commented, gifted, or shared)</span></div>
+                            <div id="participantsList" class="scroll-area max-h-56 overflow-y-auto space-y-1">
+                                <p class="text-gray-600 text-xs py-2">No participants yet.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
                         <h2 class="text-base font-semibold mb-3">Top Gifters <span class="text-gray-500 font-normal text-sm">(all time)</span></h2>
                         <div id="giftersList" class="scroll-area max-h-96 overflow-y-auto space-y-2">
                             <p class="text-gray-500 text-center py-6 text-sm">No gift data yet.</p>
@@ -262,6 +297,14 @@
             resetReconciler(document.getElementById('giftersList'));
             resetReconciler(document.getElementById('chatLog'));
             resetReconciler(document.getElementById('transcriptFeed'));
+            resetReconciler(document.getElementById('topViewersList'));
+            resetReconciler(document.getElementById('joinersList'));
+            resetReconciler(document.getElementById('participantsList'));
+            document.getElementById('viewerCountWrap').classList.add('hidden');
+            document.getElementById('viewerCountWrap').classList.remove('flex');
+            document.getElementById('topViewersList').innerHTML = '<p class="text-gray-600 text-xs py-2">Not live.</p>';
+            document.getElementById('joinersList').innerHTML = '<p class="text-gray-600 text-xs py-2">Not live.</p>';
+            document.getElementById('participantsList').innerHTML = '<p class="text-gray-600 text-xs py-2">No participants yet.</p>';
             lastTranscriptLang = '';
             document.getElementById('transcriptLangBadge').textContent = '';
             document.getElementById('aiOverviewPanel').classList.add('hidden');
@@ -301,7 +344,7 @@
         }
 
         async function fetchAllData() {
-            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters(), fetchChat(), fetchTranscripts(), fetchTranscribeStatus(), fetchAiOverview()]);
+            await Promise.all([fetchEarnings(), fetchStatus(), fetchGifts(), fetchStreams(), fetchTopGifters(), fetchChat(), fetchTranscripts(), fetchTranscribeStatus(), fetchAiOverview(), fetchAudience(), fetchParticipants()]);
         }
 
         async function fetchEarnings() {
@@ -402,6 +445,136 @@
                 const resp = await fetch('/api/top-gifters/' + selectedUser);
                 renderTopGifters(await resp.json());
             } catch (e) {}
+        }
+
+        async function fetchAudience() {
+            if (!selectedUser) return;
+            try {
+                const resp = await fetch('/api/audience/' + selectedUser);
+                renderAudienceLive(await resp.json());
+            } catch (e) {}
+        }
+
+        async function fetchParticipants() {
+            if (!selectedUser) return;
+            try {
+                let url = '/api/audience/' + selectedUser + '/participants?limit=200';
+                if (currentStreamId) url += '&stream_id=' + currentStreamId;
+                const resp = await fetch(url);
+                const data = await resp.json();
+                renderParticipants(data.participants || []);
+            } catch (e) {}
+        }
+
+        function renderAudienceLive(d) {
+            const wrap = document.getElementById('viewerCountWrap');
+            const countEl = document.getElementById('viewerCount');
+            const topList = document.getElementById('topViewersList');
+            const joinList = document.getElementById('joinersList');
+            if (d.live) {
+                wrap.classList.remove('hidden');
+                wrap.classList.add('flex');
+                const formatted = (d.viewer_count || 0).toLocaleString();
+                if (countEl.textContent !== formatted) countEl.textContent = formatted;
+            } else {
+                wrap.classList.add('hidden');
+                wrap.classList.remove('flex');
+            }
+            const top = d.top_viewers || [];
+            if (top.length === 0) {
+                topList.innerHTML = d.live
+                    ? '<p class="text-gray-600 text-xs py-2">TikTok hasn\'t exposed a ranked list for this stream.</p>'
+                    : '<p class="text-gray-600 text-xs py-2">Not live.</p>';
+            } else {
+                reconcileList(topList, top,
+                    v => v.sender_unique_id || v.sender,
+                    v => buildTopViewerItem(v),
+                    (n, v) => updateTopViewerItem(n, v)
+                );
+            }
+            const joiners = d.recent_joiners || [];
+            if (joiners.length === 0) {
+                joinList.innerHTML = d.live
+                    ? '<p class="text-gray-600 text-xs py-2">No joins yet — fires only when someone enters now.</p>'
+                    : '<p class="text-gray-600 text-xs py-2">Not live.</p>';
+            } else {
+                reconcileList(joinList, joiners,
+                    j => j.sender_unique_id || j.sender,
+                    j => buildJoinerItem(j),
+                    (n, j) => updateJoinerItem(n, j)
+                );
+            }
+        }
+
+        function buildJoinerItem(j) {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 px-2 py-1 rounded bg-gray-900/50 text-xs';
+            div.innerHTML =
+                avatar(j.avatar_url, (j.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6')
+                + '<span class="j-name flex-1 truncate font-medium"></span>'
+                + '<span class="j-time text-[10px] text-gray-500"></span>';
+            updateJoinerItem(div, j);
+            return div;
+        }
+
+        function updateJoinerItem(node, j) {
+            setNodeText(node, '.j-name', j.sender || '');
+            setNodeText(node, '.j-time', fmtTs(j.joined_at));
+            refreshAvatar(node, j.avatar_url, (j.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6');
+        }
+
+        function buildTopViewerItem(v) {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 px-2 py-1 rounded bg-gray-900/50 text-xs';
+            div.innerHTML =
+                '<span class="tv-rank w-5 text-center font-mono text-gray-500"></span>'
+                + avatar(v.avatar_url, (v.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6')
+                + '<span class="tv-name flex-1 truncate font-medium"></span>';
+            updateTopViewerItem(div, v);
+            return div;
+        }
+
+        function updateTopViewerItem(node, v) {
+            setNodeText(node, '.tv-rank', '#' + v.rank);
+            setNodeText(node, '.tv-name', v.sender || '');
+            refreshAvatar(node, v.avatar_url, (v.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6');
+        }
+
+        function renderParticipants(rows) {
+            const list = document.getElementById('participantsList');
+            if (!rows || rows.length === 0) {
+                list.innerHTML = '<p class="text-gray-600 text-xs py-2">No participants yet.</p>';
+                return;
+            }
+            reconcileList(list, rows,
+                r => r.sender_unique_id || r.sender,
+                r => buildParticipantItem(r),
+                (n, r) => updateParticipantItem(n, r)
+            );
+        }
+
+        function buildParticipantItem(r) {
+            const div = document.createElement('div');
+            div.className = 'flex items-center gap-2 px-2 py-1 rounded bg-gray-900/50 text-xs';
+            div.innerHTML =
+                avatar(r.avatar_url, (r.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6')
+                + '<div class="flex-1 min-w-0">'
+                + '<div class="p-name font-medium truncate"></div>'
+                + '<div class="p-meta text-[10px] text-gray-500"></div>'
+                + '</div>';
+            updateParticipantItem(div, r);
+            return div;
+        }
+
+        function updateParticipantItem(node, r) {
+            setNodeText(node, '.p-name', r.sender || '');
+            const parts = [];
+            if (r.comment_count) parts.push(r.comment_count + ' \u{1F4AC}');
+            if (r.gift_count) parts.push(r.gift_count + ' \u{1F381}');
+            if (r.share_count) parts.push(r.share_count + ' \u{1F501}');
+            if (r.diamond_total) parts.push(r.diamond_total + ' \u{1F48E}');
+            setNodeText(node, '.p-meta', parts.join(' · '));
+            refreshAvatar(node, r.avatar_url, (r.sender || '?').charAt(0).toUpperCase(), 'w-6 h-6');
         }
 
         async function fetchChat() {
@@ -622,6 +795,7 @@
             const isSel = u.username === selectedUser;
             node.classList.toggle('border-tiktok-cyan', isSel);
             node.classList.toggle('border-gray-800', !isSel);
+            refreshAvatar(node, u.avatar_url, u.username.charAt(0).toUpperCase(), 'w-7 h-7');
             const liveLink = node.querySelector('.t-live');
             const transcribeBtn = node.querySelector('.t-transcribe');
             const autoBtn = node.querySelector('.t-auto');
@@ -856,9 +1030,19 @@
         function esc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
         function avatar(url, initial, cls) {
             if (url) {
-                return '<div class="rounded-full flex-shrink-0 overflow-hidden bg-gray-700 ' + cls + '"><img src="' + esc(url) + '" class="w-full h-full object-cover" loading="lazy"></div>';
+                return '<div class="t-avatar rounded-full flex-shrink-0 overflow-hidden bg-gray-700 ' + cls + '" data-url="' + esc(url) + '"><img src="' + esc(url) + '" class="w-full h-full object-cover" loading="lazy" referrerpolicy="no-referrer"></div>';
             }
-            return '<div class="rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center font-bold flex-shrink-0 text-white ' + cls + '" style="font-size:10px">' + esc(initial) + '</div>';
+            return '<div class="t-avatar rounded-full bg-gradient-to-br from-tiktok-pink to-tiktok-cyan flex items-center justify-center font-bold flex-shrink-0 text-white ' + cls + '" style="font-size:10px">' + esc(initial) + '</div>';
+        }
+        function refreshAvatar(node, url, initial, cls) {
+            const el = node.querySelector('.t-avatar');
+            if (!el) return;
+            const currentUrl = el.getAttribute('data-url') || '';
+            if (url && currentUrl !== url) {
+                el.outerHTML = avatar(url, initial, cls);
+            } else if (!url && currentUrl) {
+                el.outerHTML = avatar(null, initial, cls);
+            }
         }
         function fmtTs(ts) { if (!ts) return ''; try { return new Date(ts).toLocaleTimeString(); } catch (e) { return ts; } }
 
@@ -1243,6 +1427,8 @@
                 fetchTranscripts();
                 fetchTranscribeStatus();
                 fetchAiOverview();
+                fetchAudience();
+                fetchParticipants();
             }, 3000);
             // Slow tick: tracked bar + stream history (less volatile)
             trackedTimer = setInterval(() => {

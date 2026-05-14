@@ -19,6 +19,9 @@ from TikTokLive.events import (
     LiveEndEvent,
     CommentEvent,
     EmoteChatEvent,
+    ShareEvent,
+    RoomUserSeqEvent,
+    JoinEvent,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -103,6 +106,14 @@ def init_db():
         conn.execute("ALTER TABLE tracked_users ADD COLUMN auto_transcribe INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    try:
+        conn.execute("ALTER TABLE tracked_users ADD COLUMN avatar_url TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE tracked_users ADD COLUMN avatar_fetched_at DATETIME")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -162,6 +173,43 @@ def init_db():
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_unique ON stream_summaries(username, stream_id, summary_type)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stream_participants (
+            username TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            sender_unique_id TEXT,
+            first_seen DATETIME NOT NULL,
+            last_seen DATETIME NOT NULL,
+            comment_count INTEGER NOT NULL DEFAULT 0,
+            gift_count INTEGER NOT NULL DEFAULT 0,
+            share_count INTEGER NOT NULL DEFAULT 0,
+            diamond_total INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (username, stream_id, sender)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participants_stream ON stream_participants(username, stream_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participants_lastseen ON stream_participants(username, stream_id, last_seen)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS viewer_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            stream_id TEXT NOT NULL,
+            viewer_count INTEGER NOT NULL,
+            timestamp DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_viewers_stream ON viewer_samples(username, stream_id, timestamp)"
+    )
     conn.commit()
     conn.close()
 
@@ -188,6 +236,68 @@ def _insert_chat_message(username, sender, sender_uid, message, stream_id, msg_i
         conn.execute(
             "INSERT OR IGNORE INTO chat_messages (username, sender, sender_unique_id, message, stream_id, msg_id) VALUES (?, ?, ?, ?, ?, ?)",
             (username, sender, sender_uid, message, stream_id, msg_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _upsert_participant(
+    username: str,
+    stream_id: str,
+    sender: str,
+    sender_uid: str | None,
+    *,
+    comments: int = 0,
+    gifts: int = 0,
+    shares: int = 0,
+    diamonds: int = 0,
+) -> None:
+    """Record an engaged participant (commented / gifted / shared) for this stream.
+
+    Idempotent counters: pass the per-event delta. first_seen is preserved on conflict;
+    last_seen is bumped to now.
+    """
+    if not sender or not stream_id:
+        return
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO stream_participants
+                (username, stream_id, sender, sender_unique_id,
+                 first_seen, last_seen,
+                 comment_count, gift_count, share_count, diamond_total)
+            VALUES (?, ?, ?, ?,
+                    strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    ?, ?, ?, ?)
+            ON CONFLICT(username, stream_id, sender) DO UPDATE SET
+                sender_unique_id = COALESCE(excluded.sender_unique_id, stream_participants.sender_unique_id),
+                last_seen = excluded.last_seen,
+                comment_count = stream_participants.comment_count + excluded.comment_count,
+                gift_count    = stream_participants.gift_count    + excluded.gift_count,
+                share_count   = stream_participants.share_count   + excluded.share_count,
+                diamond_total = stream_participants.diamond_total + excluded.diamond_total
+            """,
+            (
+                username, stream_id, sender, sender_uid,
+                comments, gifts, shares, diamonds,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_viewer_sample(username: str, stream_id: str, viewer_count: int) -> None:
+    if not stream_id:
+        return
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO viewer_samples (username, stream_id, viewer_count) VALUES (?, ?, ?)",
+            (username, stream_id, int(viewer_count)),
         )
         conn.commit()
     finally:
@@ -221,18 +331,105 @@ def _get_tracked_users():
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT username, added_at, auto_transcribe FROM tracked_users ORDER BY added_at ASC"
+            "SELECT username, added_at, auto_transcribe, avatar_url FROM tracked_users ORDER BY added_at ASC"
         ).fetchall()
         return [
             {
                 "username": r["username"],
                 "added_at": r["added_at"],
                 "auto_transcribe": bool(r["auto_transcribe"]),
+                "avatar_url": r["avatar_url"],
             }
             for r in rows
         ]
     finally:
         conn.close()
+
+
+def _persist_avatar(username: str, url: str) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE tracked_users SET avatar_url = ?, avatar_fetched_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE username = ?",
+            (url, username),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_PROFILE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.tiktok.com/",
+}
+
+
+def _fetch_profile_avatar(username: str) -> str | None:
+    """Scrape the public TikTok profile page and return the user's avatar URL.
+
+    Works for offline accounts and survives across server restarts. Returns None
+    if the page can't be fetched or doesn't contain the expected JSON blob.
+    """
+    try:
+        resp = http_requests.get(
+            f"https://www.tiktok.com/@{username}",
+            headers=_PROFILE_HEADERS,
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            return None
+        html = resp.text
+        marker = '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+        start = html.find(marker)
+        if start == -1:
+            return None
+        start += len(marker)
+        end = html.find("</script>", start)
+        if end == -1:
+            return None
+        blob = json.loads(html[start:end])
+        scope = blob.get("__DEFAULT_SCOPE__", {})
+        user_detail = scope.get("webapp.user-detail", {})
+        user = user_detail.get("userInfo", {}).get("user", {})
+        for key in ("avatarMedium", "avatarLarger", "avatarThumb"):
+            url = user.get(key)
+            if isinstance(url, str) and url:
+                return url
+        return None
+    except Exception:
+        return None
+
+
+def _refresh_avatar(username: str) -> str | None:
+    """Fetch a fresh avatar URL and persist it. Returns the URL or None."""
+    url = _fetch_profile_avatar(username)
+    if not url:
+        return None
+    streamer_avatars[username] = url
+    try:
+        _persist_avatar(username, url)
+    except Exception:
+        pass
+    return url
+
+
+def _avatar_refresh_loop():
+    """Periodically refresh avatars for all tracked users.
+
+    Catches both signed-URL expiration and avatar changes on TikTok. Runs at a
+    slow cadence so we don't hammer TikTok or get rate-limited.
+    """
+    while True:
+        try:
+            tracked = _get_tracked_users()
+            for t in tracked:
+                _refresh_avatar(t["username"])
+                time.sleep(2)
+        except Exception:
+            pass
+        time.sleep(6 * 60 * 60)
 
 
 def _set_auto_transcribe(username, enabled: bool):
@@ -620,6 +817,11 @@ async def _run_listener(username: str):
                     active_listeners[username][
                         "connected_at"
                     ] = datetime.now(timezone.utc).isoformat()
+                    active_listeners[username]["viewer_count"] = 0
+                    active_listeners[username]["top_viewers"] = []
+                    active_listeners[username]["recent_joiners"] = []
+                    active_listeners[username]["_last_viewer_sample_at"] = 0
+                    active_listeners[username]["viewer_count_updated_at"] = None
             try:
                 ri = client.room_info
                 if isinstance(ri, dict):
@@ -658,6 +860,9 @@ async def _run_listener(username: str):
                 if username in active_listeners:
                     active_listeners[username]["live"] = False
                     active_listeners[username]["stream_url"] = None
+                    active_listeners[username]["viewer_count"] = 0
+                    active_listeners[username]["top_viewers"] = []
+                    active_listeners[username]["recent_joiners"] = []
 
         @client.on(LiveEndEvent)
         async def on_live_end(event: LiveEndEvent):
@@ -669,6 +874,9 @@ async def _run_listener(username: str):
                 if username in active_listeners:
                     active_listeners[username]["live"] = False
                     active_listeners[username]["stream_url"] = None
+                    active_listeners[username]["viewer_count"] = 0
+                    active_listeners[username]["top_viewers"] = []
+                    active_listeners[username]["recent_joiners"] = []
 
         @client.on(GiftEvent)
         async def on_gift(event: GiftEvent):
@@ -713,6 +921,15 @@ async def _run_listener(username: str):
                 usd,
                 sid,
             )
+            try:
+                _upsert_participant(
+                    username, sid, sender_name,
+                    getattr(event.user, "unique_id", None),
+                    gifts=int(event.repeat_count) or 1,
+                    diamonds=diamonds,
+                )
+            except Exception:
+                pass
 
         @client.on(CommentEvent)
         async def on_comment(event: CommentEvent):
@@ -729,6 +946,124 @@ async def _run_listener(username: str):
                     if len(_recent_chat) > 5000:
                         _recent_chat.clear()
                 _insert_chat_message(username, sender_name, sender_uid, msg, sid, msg_id)
+                _upsert_participant(username, sid, sender_name, sender_uid, comments=1)
+            except Exception:
+                pass
+
+        @client.on(ShareEvent)
+        async def on_share(event: ShareEvent):
+            try:
+                user = getattr(event, "user", None)
+                if not user:
+                    return
+                sender_name = getattr(user, "nickname", "") or getattr(user, "unique_id", "") or ""
+                sender_uid = getattr(user, "unique_id", "") or ""
+                if not sender_name:
+                    return
+                sid = stream_id_holder[0] or "unknown"
+                _upsert_participant(username, sid, sender_name, sender_uid, shares=1)
+                try:
+                    at = getattr(user, "avatar_thumb", None)
+                    if at and getattr(at, "m_urls", None):
+                        sender_avatars[sender_name] = at.m_urls[0]
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        @client.on(RoomUserSeqEvent)
+        async def on_room_user_seq(event: RoomUserSeqEvent):
+            try:
+                viewer_count = int(getattr(event, "m_total", 0) or 0)
+                # TikTok populates either m_contributors (ranked donors) or seats
+                # (live top-viewers). Small streams often leave m_contributors empty.
+                contributors = (
+                    list(getattr(event, "m_contributors", None) or [])
+                    or list(getattr(event, "seats", None) or [])
+                )
+                top = []
+                for c in contributors[:20]:
+                    u = getattr(c, "m_user", None)
+                    if not u:
+                        continue
+                    nick = getattr(u, "nickname", "") or getattr(u, "unique_id", "") or ""
+                    if not nick:
+                        continue
+                    avatar_url = None
+                    try:
+                        at = getattr(u, "avatar_thumb", None)
+                        if at and getattr(at, "m_urls", None):
+                            avatar_url = at.m_urls[0]
+                            sender_avatars[nick] = avatar_url
+                    except Exception:
+                        pass
+                    top.append({
+                        "rank": int(getattr(c, "m_rank", 0) or 0),
+                        "score": int(getattr(c, "m_score", 0) or 0),
+                        "sender": nick,
+                        "sender_unique_id": getattr(u, "unique_id", "") or "",
+                        "avatar_url": avatar_url,
+                    })
+
+                now_ts = time.time()
+                sid = stream_id_holder[0] or "unknown"
+                should_sample = False
+                with active_lock:
+                    info = active_listeners.get(username)
+                    if info is not None:
+                        info["viewer_count"] = viewer_count
+                        info["top_viewers"] = top
+                        info["viewer_count_updated_at"] = datetime.now(timezone.utc).isoformat()
+                        last = info.get("_last_viewer_sample_at", 0)
+                        if now_ts - last >= 30:
+                            info["_last_viewer_sample_at"] = now_ts
+                            should_sample = True
+                if should_sample and sid != "unknown":
+                    _insert_viewer_sample(username, sid, viewer_count)
+            except Exception:
+                pass
+
+        @client.on(JoinEvent)
+        async def on_join(event: JoinEvent):
+            try:
+                user = getattr(event, "user", None)
+                if not user:
+                    return
+                nick = getattr(user, "nickname", "") or getattr(user, "unique_id", "") or ""
+                uid = getattr(user, "unique_id", "") or ""
+                if not nick:
+                    return
+                avatar_url = None
+                try:
+                    at = getattr(user, "avatar_thumb", None)
+                    if at and getattr(at, "m_urls", None):
+                        avatar_url = at.m_urls[0]
+                        sender_avatars[nick] = avatar_url
+                except Exception:
+                    pass
+                entry = {
+                    "sender": nick,
+                    "sender_unique_id": uid,
+                    "avatar_url": avatar_url,
+                    "joined_at": datetime.now(timezone.utc).isoformat(),
+                }
+                with active_lock:
+                    info = active_listeners.get(username)
+                    if info is None:
+                        return
+                    joiners = info.get("recent_joiners")
+                    if joiners is None:
+                        joiners = []
+                        info["recent_joiners"] = joiners
+                    # De-dup by uid/nick: bump existing entry to the front
+                    key = uid or nick
+                    for i, j in enumerate(joiners):
+                        if (j.get("sender_unique_id") or j.get("sender")) == key:
+                            joiners.pop(i)
+                            break
+                    joiners.insert(0, entry)
+                    if len(joiners) > 30:
+                        del joiners[30:]
             except Exception:
                 pass
 
@@ -887,6 +1222,9 @@ def api_listen():
 
     username = normalize_username(raw)
     _add_tracked_user(username)
+    threading.Thread(
+        target=_refresh_avatar, args=(username,), daemon=True
+    ).start()
 
     with active_lock:
         already = username in active_listeners and not active_listeners[
@@ -923,7 +1261,7 @@ def api_tracked():
                 info = active_listeners.get(t["username"])
                 t["is_active"] = info is not None
                 t["live"] = info.get("live", False) if info else False
-                t["avatar_url"] = streamer_avatars.get(t["username"])
+                t["avatar_url"] = streamer_avatars.get(t["username"]) or t.get("avatar_url")
                 if t["live"] and not listeners_disabled():
                     t["live_url"] = (
                         f"https://www.tiktok.com/@{t['username']}/live"
@@ -987,6 +1325,123 @@ def api_status(username):
             ),
         }
     )
+
+
+@app.route("/api/audience/<username>")
+def api_audience_live(username):
+    """Live audience snapshot: viewer count + top viewers (in-memory only).
+
+    Returns 0/[] when the listener is offline. Top viewers come from TikTok's
+    RoomUserSeqEvent — usually ~20 top-ranked users by score.
+    """
+    username = normalize_username(username)
+    with active_lock:
+        info = active_listeners.get(username)
+        if info is None:
+            return jsonify({
+                "username": username, "live": False, "viewer_count": 0,
+                "top_viewers": [], "stream_id": None,
+            })
+        return jsonify({
+            "username": username,
+            "live": bool(info.get("live")),
+            "stream_id": info.get("stream_id"),
+            "viewer_count": int(info.get("viewer_count", 0)),
+            "top_viewers": list(info.get("top_viewers") or []),
+            "recent_joiners": list(info.get("recent_joiners") or []),
+            "updated_at": info.get("viewer_count_updated_at"),
+        })
+
+
+@app.route("/api/audience/<username>/participants")
+def api_audience_participants(username):
+    """Engaged participants (commented / gifted / shared) for a stream.
+
+    Defaults to the current/most-recent stream. Use ?stream_id=... to query a
+    specific past stream. Returns rows ordered by most recent activity first.
+    """
+    username = normalize_username(username)
+    stream_id = request.args.get("stream_id", None)
+    limit = min(max(request.args.get("limit", 200, type=int), 1), 1000)
+
+    if not stream_id:
+        with active_lock:
+            info = active_listeners.get(username)
+            stream_id = info.get("stream_id") if info else None
+        if not stream_id:
+            conn = get_db()
+            try:
+                row = conn.execute(
+                    "SELECT stream_id FROM stream_participants WHERE username = ? ORDER BY last_seen DESC LIMIT 1",
+                    (username,),
+                ).fetchone()
+            finally:
+                conn.close()
+            stream_id = row["stream_id"] if row else None
+
+    if not stream_id:
+        return jsonify({"username": username, "stream_id": None, "participants": []})
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT sender, sender_unique_id, first_seen, last_seen,
+                   comment_count, gift_count, share_count, diamond_total
+            FROM stream_participants
+            WHERE username = ? AND stream_id = ?
+            ORDER BY last_seen DESC
+            LIMIT ?
+            """,
+            (username, stream_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    participants = []
+    for r in rows:
+        d = dict(r)
+        d["avatar_url"] = sender_avatars.get(r["sender"])
+        participants.append(d)
+    return jsonify({
+        "username": username,
+        "stream_id": stream_id,
+        "participants": participants,
+    })
+
+
+@app.route("/api/audience/<username>/viewers")
+def api_audience_viewers_history(username):
+    """Viewer-count time series for a stream (sampled every 30s)."""
+    username = normalize_username(username)
+    stream_id = request.args.get("stream_id", None)
+    limit = min(max(request.args.get("limit", 500, type=int), 1), 5000)
+
+    if not stream_id:
+        with active_lock:
+            info = active_listeners.get(username)
+            stream_id = info.get("stream_id") if info else None
+    if not stream_id:
+        return jsonify({"username": username, "stream_id": None, "samples": []})
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT viewer_count, timestamp FROM viewer_samples
+            WHERE username = ? AND stream_id = ?
+            ORDER BY timestamp ASC
+            LIMIT ?
+            """,
+            (username, stream_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({
+        "username": username,
+        "stream_id": stream_id,
+        "samples": [dict(r) for r in rows],
+    })
 
 
 @app.route("/api/earnings/<username>")
@@ -1526,6 +1981,30 @@ def api_summary_stream(username, stream_id):
 
 
 init_db()
+
+
+def _bootstrap_avatars():
+    """Hydrate streamer_avatars from DB and refresh any stale/missing entries."""
+    try:
+        for t in _get_tracked_users():
+            if t.get("avatar_url"):
+                streamer_avatars[t["username"]] = t["avatar_url"]
+    except Exception:
+        pass
+
+    def _initial_refresh():
+        try:
+            for t in _get_tracked_users():
+                _refresh_avatar(t["username"])
+                time.sleep(2)
+        except Exception:
+            pass
+
+    threading.Thread(target=_initial_refresh, daemon=True).start()
+    threading.Thread(target=_avatar_refresh_loop, daemon=True).start()
+
+
+_bootstrap_avatars()
 _start_all_tracked()
 
 if OLLAMA_BASE_URL:

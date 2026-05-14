@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import threading
 import atexit
@@ -84,27 +85,140 @@ def _insert_transcript(username, stream_id, original_text, detected_language, ch
         conn.close()
 
 
-def _translate_and_update(row_id, text, source_lang, target_lang):
-    if not LIBRETRANSLATE_URL or not text:
-        return
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？\n])\s+")
+_COMMA_BOUNDARY_RE = re.compile(r"(?<=[,，;；:：])\s+")
+_TRANSLATE_HARD_LIMIT = 150
+
+
+def _word_chunk(text: str, limit: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [text[:limit]] if text else []
+    out: list[str] = []
+    buf: list[str] = []
+    cur = 0
+    for w in words:
+        if cur + len(w) + 1 > limit and buf:
+            out.append(" ".join(buf))
+            buf = [w]
+            cur = len(w)
+        else:
+            buf.append(w)
+            cur += len(w) + 1
+    if buf:
+        out.append(" ".join(buf))
+    return out
+
+
+def _split_for_translation(text: str) -> list[str]:
+    """Break a transcript chunk into translation-friendly pieces.
+
+    Argos Translate (LibreTranslate's default backend) silently truncates a
+    single input at its model's max output tokens. Whisper output for live
+    streams rarely has clean sentence punctuation — a 30-second chunk often
+    arrives as one giant "sentence" and most of it disappears in translation.
+
+    Strategy: passthrough short inputs (fast path). Cascade longer ones through
+    sentence -> comma -> word splits, then greedy-merge resulting fragments
+    back up to the limit so the translation server makes 1-2 model calls per
+    chunk instead of N.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= _TRANSLATE_HARD_LIMIT:
+        return [text]
+
+    fragments: list[str] = []
+    for sentence in _SENTENCE_BOUNDARY_RE.split(text):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= _TRANSLATE_HARD_LIMIT:
+            fragments.append(sentence)
+            continue
+        for sub in _COMMA_BOUNDARY_RE.split(sentence):
+            sub = sub.strip()
+            if not sub:
+                continue
+            if len(sub) <= _TRANSLATE_HARD_LIMIT:
+                fragments.append(sub)
+            else:
+                fragments.extend(_word_chunk(sub, _TRANSLATE_HARD_LIMIT))
+
+    # Greedy merge: combine small fragments back up to the limit. Without this,
+    # a comma-heavy chunk like "Không, không, không, không..." would produce N
+    # separate model invocations even in batch mode.
+    merged: list[str] = []
+    buf: list[str] = []
+    cur = 0
+    for f in fragments:
+        sep_len = 1 if buf else 0
+        if buf and cur + sep_len + len(f) > _TRANSLATE_HARD_LIMIT:
+            merged.append(" ".join(buf))
+            buf = [f]
+            cur = len(f)
+        else:
+            buf.append(f)
+            cur += sep_len + len(f)
+    if buf:
+        merged.append(" ".join(buf))
+    return merged
+
+
+def _translate_batch(chunks: list[str], source_lang: str, target_lang: str) -> list[str]:
+    """Translate a list of chunks in one LibreTranslate call.
+
+    LibreTranslate accepts `q` as a string OR a list and returns
+    `translatedText` in the same shape. Falls back to per-chunk calls if the
+    server returns an unexpected shape.
+    """
+    if not chunks:
+        return []
     payload = {
-        "q": text,
+        "q": chunks,
         "source": source_lang or "auto",
         "target": target_lang,
         "format": "text",
     }
     if LIBRETRANSLATE_API_KEY:
         payload["api_key"] = LIBRETRANSLATE_API_KEY
-    try:
-        resp = requests.post(
+    resp = requests.post(
+        f"{LIBRETRANSLATE_URL}/translate",
+        json=payload,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    body = resp.json() or {}
+    field = body.get("translatedText", "")
+    if isinstance(field, list) and len(field) == len(chunks):
+        return [str(p or "").strip() for p in field]
+    # Some LibreTranslate builds always return a string. Fall back to per-chunk.
+    out: list[str] = []
+    for c in chunks:
+        single_payload = {**payload, "q": c}
+        r = requests.post(
             f"{LIBRETRANSLATE_URL}/translate",
-            json=payload,
-            timeout=30,
+            json=single_payload,
+            timeout=60,
         )
-        resp.raise_for_status()
-        translated = (resp.json() or {}).get("translatedText", "")
-        if isinstance(translated, str):
-            translated = translated.strip()
+        r.raise_for_status()
+        t = (r.json() or {}).get("translatedText", "")
+        if isinstance(t, list):
+            t = t[0] if t else ""
+        out.append(str(t or "").strip())
+    return out
+
+
+def _translate_and_update(row_id, text, source_lang, target_lang):
+    if not LIBRETRANSLATE_URL or not text:
+        return
+    chunks = _split_for_translation(text)
+    if not chunks:
+        return
+    try:
+        translated_parts = _translate_batch(chunks, source_lang or "auto", target_lang)
+        translated = " ".join(p for p in translated_parts if p).strip()
         if not translated:
             return
         conn = get_db()
