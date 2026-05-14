@@ -135,7 +135,7 @@
                         <div class="flex items-center justify-between mb-3">
                             <div class="flex items-center gap-2">
                                 <svg class="w-4 h-4 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
-                                <h2 class="text-base font-semibold">Live Transcript <span id="transcriptLangBadge" class="text-gray-500 font-normal text-xs"></span></h2>
+                                <h2 class="text-base font-semibold">Live Transcript <span id="transcriptLangBadge" class="text-gray-500 font-normal text-xs"></span> <span id="transcribingBadge" class="text-amber-400 font-normal text-xs hidden"></span></h2>
                             </div>
                             <div class="flex items-center gap-3">
                                 <label class="flex items-center gap-1.5 cursor-pointer select-none" title="Show translation under each transcript line">
@@ -234,6 +234,7 @@
     <script>
         let selectedUser = null;
         let transcribingUser = null;
+        let transcribingStreamId = null;
         let pollTimer = null;
         let trackedTimer = null;
         let currentStreamId = null;
@@ -296,7 +297,10 @@
             resetReconciler(document.getElementById('streamsList'));
             resetReconciler(document.getElementById('giftersList'));
             resetReconciler(document.getElementById('chatLog'));
-            resetReconciler(document.getElementById('transcriptFeed'));
+            // transcriptFeed intentionally NOT reset — it shows the actively-
+            // transcribing user's stream (independent of which user is selected).
+            // Resetting here caused the panel to flash empty on user switch and
+            // can mask that transcription is still happening for someone else.
             resetReconciler(document.getElementById('topViewersList'));
             resetReconciler(document.getElementById('joinersList'));
             resetReconciler(document.getElementById('participantsList'));
@@ -1307,17 +1311,36 @@
                 const resp = await fetch('/api/transcribe/status');
                 const data = await resp.json();
                 const newUser = data.active ? data.username : null;
+                const newStream = data.active ? (data.stream_id || null) : null;
                 if (newUser !== transcribingUser) {
                     transcribingUser = newUser;
                     if (selectedUser) refreshTracked();
                 }
+                transcribingStreamId = newStream;
+                updateTranscriptHeader();
             } catch (e) {}
         }
 
+        function updateTranscriptHeader() {
+            // Surface the transcribing user prominently when it differs from the
+            // currently selected user — this used to silently render empty.
+            const badge = document.getElementById('transcribingBadge');
+            if (!badge) return;
+            if (transcribingUser && transcribingUser !== selectedUser) {
+                badge.textContent = '· transcribing @' + transcribingUser;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+                badge.textContent = '';
+            }
+        }
+
         async function fetchTranscripts() {
-            if (!transcribingUser || !currentStreamId) return;
+            // Use the transcribing user's OWN stream id (not the selected
+            // user's stream id) — they may be different.
+            if (!transcribingUser || !transcribingStreamId) return;
             try {
-                const resp = await fetch('/api/transcripts/' + transcribingUser + '?stream_id=' + currentStreamId + '&limit=100');
+                const resp = await fetch('/api/transcripts/' + transcribingUser + '?stream_id=' + transcribingStreamId + '&limit=100');
                 if (!resp.ok) return;
                 const data = await resp.json();
                 renderTranscriptFeed(data);

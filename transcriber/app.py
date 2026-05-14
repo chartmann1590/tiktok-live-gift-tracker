@@ -342,18 +342,26 @@ def api_transcripts(username):
 
     conn = get_db()
     try:
+        # Return the MOST RECENT `limit` rows (DESC + LIMIT) but order the
+        # response ASC so callers can render top-to-bottom oldest-to-newest.
+        # Otherwise long streams (>limit chunks) silently hide new chunks
+        # behind a sliding window pinned to the start of the stream.
         if stream_id:
             rows = conn.execute(
-                "SELECT id, username, stream_id, original_text, translated_text, "
-                "detected_language, target_lang, chunk_index, timestamp FROM transcripts "
-                "WHERE username = ? AND stream_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                "SELECT * FROM ("
+                "  SELECT id, username, stream_id, original_text, translated_text, "
+                "  detected_language, target_lang, chunk_index, timestamp FROM transcripts "
+                "  WHERE username = ? AND stream_id = ? ORDER BY id DESC LIMIT ? OFFSET ?"
+                ") ORDER BY id ASC",
                 (username, stream_id, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, username, stream_id, original_text, translated_text, "
-                "detected_language, target_lang, chunk_index, timestamp FROM transcripts "
-                "WHERE username = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                "SELECT * FROM ("
+                "  SELECT id, username, stream_id, original_text, translated_text, "
+                "  detected_language, target_lang, chunk_index, timestamp FROM transcripts "
+                "  WHERE username = ? ORDER BY id DESC LIMIT ? OFFSET ?"
+                ") ORDER BY id ASC",
                 (username, limit, offset),
             ).fetchall()
         return jsonify([dict(r) for r in rows])
