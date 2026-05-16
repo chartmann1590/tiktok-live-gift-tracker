@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Messages - TikTok Live Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        tiktok: { pink: '#fe2c55', cyan: '#25f4ee' }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .scroll-area::-webkit-scrollbar { width: 6px; }
+        .scroll-area::-webkit-scrollbar-track { background: #111827; }
+        .scroll-area::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+        mark { background: rgba(37, 244, 238, 0.18); color: #a5f3fc; border-radius: 0.25rem; padding: 0 0.15rem; }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-950 text-gray-100">
+    <div class="max-w-7xl mx-auto px-4 py-5">
+        <header class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
+            <div>
+                <div class="flex items-center gap-3">
+                    <a href="/" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-800 bg-gray-900 text-gray-400 hover:text-white hover:border-gray-700 transition-colors" title="Back to dashboard">
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                    </a>
+                    <h1 class="text-2xl font-bold bg-gradient-to-r from-tiktok-cyan to-tiktok-pink bg-clip-text text-transparent">Message Search</h1>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">Search chat, transcripts, streams, and viewer activity across the stored databases.</p>
+            </div>
+            <div id="transcriberStatus" class="inline-flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-400">
+                <span class="h-2 w-2 rounded-full bg-gray-600"></span>
+                Transcript service unknown
+            </div>
+        </header>
+
+        <section class="border border-gray-800 bg-gray-900 rounded-lg p-4 mb-5">
+            <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-3">
+                <div class="relative">
+                    <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.35-5.15a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z"/></svg>
+                    <input id="queryInput" type="search" placeholder="Search chat messages and transcripts..."
+                        class="w-full pl-10 pr-4 py-3 bg-gray-950 border border-gray-800 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-tiktok-cyan focus:ring-1 focus:ring-tiktok-cyan">
+                </div>
+                <button id="searchBtn" class="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-gradient-to-r from-tiktok-pink to-pink-600 font-semibold text-white hover:from-pink-600 hover:to-tiktok-pink active:scale-95 transition-all">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.35-5.15a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z"/></svg>
+                    Search
+                </button>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mt-4">
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">Type</span>
+                    <select id="typeFilter" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                        <option value="all">Chat + transcripts</option>
+                        <option value="chat">Chat only</option>
+                        <option value="transcript">Transcripts only</option>
+                    </select>
+                </label>
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">Streamer</span>
+                    <input id="usernameFilter" type="text" placeholder="@username" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                </label>
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">Viewer</span>
+                    <input id="senderFilter" type="text" placeholder="@viewer" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                </label>
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">Stream</span>
+                    <input id="streamFilter" type="text" placeholder="stream id" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                </label>
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">From</span>
+                    <input id="fromFilter" type="date" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                </label>
+                <label class="block">
+                    <span class="block text-xs uppercase tracking-wide text-gray-500 mb-1">To</span>
+                    <input id="toFilter" type="date" class="w-full bg-gray-950 border border-gray-800 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-tiktok-cyan">
+                </label>
+            </div>
+
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-4">
+                <div class="flex items-center gap-2">
+                    <button data-sort="newest" class="sort-btn px-3 py-1.5 rounded-lg text-sm font-medium bg-tiktok-cyan/15 text-tiktok-cyan border border-tiktok-cyan/30">Newest</button>
+                    <button data-sort="oldest" class="sort-btn px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-950 text-gray-400 border border-gray-800 hover:text-white">Oldest</button>
+                </div>
+                <button id="clearBtn" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-800 text-sm text-gray-400 hover:text-white hover:border-gray-700 transition-colors">
+                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    Clear filters
+                </button>
+            </div>
+        </section>
+
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            <div class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Matching messages</div>
+                <div id="statMessages" class="text-2xl font-bold text-tiktok-cyan">0</div>
+            </div>
+            <div class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Unique chatters</div>
+                <div id="statChatters" class="text-2xl font-bold text-violet-300">0</div>
+            </div>
+            <div class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Gifts</div>
+                <div id="statGifts" class="text-2xl font-bold text-tiktok-pink">0</div>
+                <div id="statGiftValue" class="text-xs text-gray-500 mt-1">$0.00</div>
+            </div>
+            <div class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                <div class="text-xs uppercase tracking-wide text-gray-500 mb-1">Transcript chunks</div>
+                <div id="statTranscripts" class="text-2xl font-bold text-amber-300">0</div>
+            </div>
+        </div>
+
+        <main class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-5">
+            <section class="border border-gray-800 bg-gray-900 rounded-lg">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+                    <h2 class="text-base font-semibold">Results</h2>
+                    <span id="resultCount" class="text-xs text-gray-500">0 loaded</span>
+                </div>
+                <div id="resultsList" class="scroll-area max-h-[720px] overflow-y-auto divide-y divide-gray-800">
+                    <div class="px-4 py-16 text-center text-gray-500">
+                        <p class="text-sm">Run a search to inspect stored chat and transcript history.</p>
+                    </div>
+                </div>
+            </section>
+
+            <aside class="space-y-5">
+                <section class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                    <h2 class="text-base font-semibold mb-3">Viewer Stats</h2>
+                    <div id="participantsList" class="space-y-2">
+                        <p class="text-sm text-gray-500">Filter by viewer or run a search to see comment, gift, and share totals.</p>
+                    </div>
+                </section>
+
+                <section class="border border-gray-800 bg-gray-900 rounded-lg p-4">
+                    <h2 class="text-base font-semibold mb-3">Language Mix</h2>
+                    <div id="languageList" class="space-y-2">
+                        <p class="text-sm text-gray-500">Transcript languages appear when the transcriber database is reachable.</p>
+                    </div>
+                </section>
+            </aside>
+        </main>
+    </div>
+
+    <script>
+        let currentSort = 'newest';
+        let activeController = null;
+
+        const els = {
+            q: document.getElementById('queryInput'),
+            type: document.getElementById('typeFilter'),
+            username: document.getElementById('usernameFilter'),
+            sender: document.getElementById('senderFilter'),
+            stream: document.getElementById('streamFilter'),
+            from: document.getElementById('fromFilter'),
+            to: document.getElementById('toFilter'),
+            results: document.getElementById('resultsList'),
+            resultCount: document.getElementById('resultCount'),
+            transcriberStatus: document.getElementById('transcriberStatus')
+        };
+
+        document.getElementById('searchBtn').addEventListener('click', runSearch);
+        document.getElementById('clearBtn').addEventListener('click', clearFilters);
+        els.q.addEventListener('keydown', e => { if (e.key === 'Enter') runSearch(); });
+        document.querySelectorAll('.sort-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                currentSort = btn.dataset.sort;
+                document.querySelectorAll('.sort-btn').forEach(b => {
+                    const active = b.dataset.sort === currentSort;
+                    b.className = active
+                        ? 'sort-btn px-3 py-1.5 rounded-lg text-sm font-medium bg-tiktok-cyan/15 text-tiktok-cyan border border-tiktok-cyan/30'
+                        : 'sort-btn px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-950 text-gray-400 border border-gray-800 hover:text-white';
+                });
+                runSearch();
+            });
+        });
+
+        function params() {
+            const p = new URLSearchParams();
+            const values = {
+                q: els.q.value.trim(),
+                type: els.type.value,
+                username: els.username.value.trim(),
+                sender: els.sender.value.trim(),
+                stream_id: els.stream.value.trim(),
+                date_from: els.from.value,
+                date_to: els.to.value,
+                sort: currentSort,
+                limit: '100'
+            };
+            Object.entries(values).forEach(([k, v]) => { if (v) p.set(k, v); });
+            return p;
+        }
+
+        async function runSearch() {
+            if (activeController) activeController.abort();
+            activeController = new AbortController();
+            const p = params();
+            els.results.innerHTML = '<div class="px-4 py-16 text-center text-gray-500 text-sm">Searching stored messages...</div>';
+            try {
+                const [searchResp, statsResp] = await Promise.all([
+                    fetch('/api/search?' + p.toString(), { signal: activeController.signal }),
+                    fetch('/api/search/stats?' + p.toString(), { signal: activeController.signal })
+                ]);
+                const searchData = await searchResp.json();
+                const statsData = await statsResp.json();
+                renderResults(searchData.results || []);
+                renderStats(statsData);
+                updateTranscriberStatus(searchData.transcripts || statsData.transcripts || {});
+            } catch (e) {
+                if (e.name === 'AbortError') return;
+                els.results.innerHTML = '<div class="px-4 py-16 text-center text-red-300 text-sm">Search failed: ' + esc(e.message) + '</div>';
+            }
+        }
+
+        function renderResults(rows) {
+            els.resultCount.textContent = rows.length + ' loaded';
+            if (!rows.length) {
+                els.results.innerHTML = '<div class="px-4 py-16 text-center text-gray-500 text-sm">No matching messages found.</div>';
+                return;
+            }
+            els.results.innerHTML = rows.map(r => {
+                const isTranscript = r.type === 'transcript';
+                const badge = isTranscript
+                    ? '<span class="rounded bg-amber-400/10 text-amber-300 border border-amber-400/20 px-2 py-0.5 text-[11px] font-semibold">Transcript</span>'
+                    : '<span class="rounded bg-tiktok-cyan/10 text-tiktok-cyan border border-tiktok-cyan/20 px-2 py-0.5 text-[11px] font-semibold">Chat</span>';
+                const sender = r.sender_unique_id ? '@' + r.sender_unique_id : (r.sender || 'stream audio');
+                const translated = r.translated_text
+                    ? '<div class="mt-2 text-sm text-tiktok-cyan/70 italic">' + highlight(r.translated_text) + '</div>'
+                    : '';
+                return '<article class="p-4 hover:bg-gray-950/40 transition-colors">'
+                    + '<div class="flex flex-wrap items-center gap-2 mb-2">'
+                    + badge
+                    + '<span class="text-sm font-semibold text-white">@' + esc(r.username || '') + '</span>'
+                    + '<button class="text-xs text-gray-500 hover:text-tiktok-cyan" onclick="setFilter(\'stream\', ' + esc(js(r.stream_id || '')) + ')">' + esc(shortId(r.stream_id || '')) + '</button>'
+                    + '<span class="text-xs text-gray-600 ml-auto">' + esc(fmt(r.timestamp)) + '</span>'
+                    + '</div>'
+                    + '<div class="flex items-start gap-2 text-sm">'
+                    + '<button class="text-tiktok-cyan font-medium shrink-0 hover:underline" onclick="setFilter(\'sender\', ' + esc(js(sender.replace(/^@/, ''))) + ')">' + esc(sender) + '</button>'
+                    + '<div class="min-w-0 text-gray-300 break-words">' + highlight(r.text || '') + translated + '</div>'
+                    + '</div>'
+                    + '</article>';
+            }).join('');
+        }
+
+        function renderStats(data) {
+            document.getElementById('statMessages').textContent = fmtNum(data.totals?.matching_messages || 0);
+            document.getElementById('statChatters').textContent = fmtNum(data.chat?.unique_chatters || 0);
+            document.getElementById('statGifts').textContent = fmtNum(data.gifts?.gift_count || 0);
+            document.getElementById('statGiftValue').textContent = '$' + Number(data.gifts?.usd_total || 0).toFixed(2) + ' / ' + fmtNum(data.gifts?.diamond_total || 0) + ' diamonds';
+            document.getElementById('statTranscripts').textContent = fmtNum(data.transcripts?.transcript_count || 0);
+
+            const participants = data.participants || [];
+            document.getElementById('participantsList').innerHTML = participants.length
+                ? participants.map(p => '<button class="w-full text-left rounded-lg bg-gray-950 border border-gray-800 px-3 py-2 hover:border-gray-700" onclick="setFilter(\'sender\', ' + esc(js(p.sender || '')) + ')">'
+                    + '<div class="flex items-center justify-between gap-2"><span class="font-medium text-sm truncate">' + esc(p.sender || '') + '</span><span class="text-[11px] text-gray-500">' + fmtNum(p.streams || 0) + ' streams</span></div>'
+                    + '<div class="mt-1 text-xs text-gray-500">' + fmtNum(p.comment_count || 0) + ' comments · ' + fmtNum(p.gift_count || 0) + ' gifts · ' + fmtNum(p.share_count || 0) + ' shares · ' + fmtNum(p.diamond_total || 0) + ' diamonds</div>'
+                    + '</button>').join('')
+                : '<p class="text-sm text-gray-500">No viewer stats match these filters.</p>';
+
+            const langs = data.transcripts?.languages || [];
+            document.getElementById('languageList').innerHTML = langs.length
+                ? langs.map(l => '<div class="flex items-center justify-between rounded-lg bg-gray-950 border border-gray-800 px-3 py-2 text-sm"><span>' + esc(l.language || 'unknown') + '</span><span class="text-gray-500">' + fmtNum(l.count || 0) + '</span></div>').join('')
+                : '<p class="text-sm text-gray-500">No transcript language data for this search.</p>';
+        }
+
+        function updateTranscriberStatus(status) {
+            const ok = !!status.available;
+            els.transcriberStatus.innerHTML = ok
+                ? '<span class="h-2 w-2 rounded-full bg-green-400"></span>Transcript service connected'
+                : '<span class="h-2 w-2 rounded-full bg-yellow-400"></span>' + esc(status.error || 'Transcript service unavailable');
+            els.transcriberStatus.className = ok
+                ? 'inline-flex items-center gap-2 rounded-lg border border-green-500/20 bg-green-500/10 px-3 py-2 text-xs text-green-300'
+                : 'inline-flex items-center gap-2 rounded-lg border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300';
+        }
+
+        function setFilter(kind, value) {
+            if (kind === 'sender' && value !== 'stream audio') els.sender.value = value;
+            if (kind === 'stream') els.stream.value = value;
+            runSearch();
+        }
+
+        function clearFilters() {
+            [els.q, els.username, els.sender, els.stream, els.from, els.to].forEach(el => el.value = '');
+            els.type.value = 'all';
+            runSearch();
+        }
+
+        function highlight(text) {
+            const q = els.q.value.trim();
+            const safe = esc(text || '');
+            if (!q) return safe;
+            const words = q.split(/\s+/).filter(Boolean).slice(0, 6).map(escapeRegex);
+            if (!words.length) return safe;
+            return safe.replace(new RegExp('(' + words.join('|') + ')', 'ig'), '<mark>$1</mark>');
+        }
+
+        function esc(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        function js(s) { return JSON.stringify(String(s ?? '')); }
+        function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+        function fmt(ts) { return ts ? new Date(ts).toLocaleString() : ''; }
+        function fmtNum(n) { return Number(n || 0).toLocaleString(); }
+        function shortId(id) { return id && id.length > 18 ? id.slice(0, 8) + '...' + id.slice(-6) : id; }
+
+        runSearch();
+    </script>
+</body>
+</html>

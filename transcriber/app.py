@@ -67,8 +67,46 @@ def init_db():
             conn.execute(ddl)
         except sqlite3.OperationalError:
             pass
+    _init_transcript_search_index(conn)
     conn.commit()
     conn.close()
+
+
+def _init_transcript_search_index(conn):
+    try:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts
+            USING fts5(original_text, translated_text, content='transcripts', content_rowid='id')
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts BEGIN
+                INSERT INTO transcripts_fts(rowid, original_text, translated_text)
+                VALUES (new.id, new.original_text, new.translated_text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts BEGIN
+                INSERT INTO transcripts_fts(transcripts_fts, rowid, original_text, translated_text)
+                VALUES('delete', old.id, old.original_text, old.translated_text);
+            END;
+            CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE OF original_text, translated_text ON transcripts BEGIN
+                INSERT INTO transcripts_fts(transcripts_fts, rowid, original_text, translated_text)
+                VALUES('delete', old.id, old.original_text, old.translated_text);
+                INSERT INTO transcripts_fts(rowid, original_text, translated_text)
+                VALUES (new.id, new.original_text, new.translated_text);
+            END;
+            """
+        )
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM transcripts_fts").fetchone()
+        source = conn.execute("SELECT COUNT(*) AS cnt FROM transcripts").fetchone()
+        if row["cnt"] == 0 and source["cnt"] > 0:
+            conn.execute(
+                "INSERT INTO transcripts_fts(rowid, original_text, translated_text) "
+                "SELECT id, original_text, translated_text FROM transcripts"
+            )
+    except sqlite3.OperationalError as e:
+        print(f"[transcriber-search] SQLite FTS unavailable; using LIKE fallback: {e}", flush=True)
 
 
 def _insert_transcript(username, stream_id, original_text, detected_language, chunk_index, target_lang=None):
@@ -388,6 +426,158 @@ def api_transcript_streams(username):
             (username,),
         ).fetchall()
         return jsonify([dict(r) for r in rows])
+    finally:
+        conn.close()
+
+
+_FTS_TOKEN_RE = re.compile(r'"[^"]+"|\S+')
+
+
+def _clean_filter(value: str | None, *, username: bool = False) -> str:
+    value = (value or "").strip()
+    if username:
+        value = value.lstrip("@").lower()
+    return value
+
+
+def _fts_query(text: str) -> str:
+    tokens = []
+    for raw in _FTS_TOKEN_RE.findall(text or ""):
+        token = raw.strip().strip('"')
+        if token:
+            escaped = token.replace('"', '""')
+            tokens.append(f'"{escaped}"')
+    return " AND ".join(tokens)
+
+
+def _search_filters(alias=""):
+    prefix = f"{alias}." if alias else ""
+    where = []
+    params = []
+    username = _clean_filter(request.args.get("username"), username=True)
+    stream_id = _clean_filter(request.args.get("stream_id"))
+    date_from = _clean_filter(request.args.get("date_from"))
+    date_to = _clean_filter(request.args.get("date_to"))
+    if username:
+        where.append(f"{prefix}username = ?")
+        params.append(username)
+    if stream_id:
+        where.append(f"{prefix}stream_id = ?")
+        params.append(stream_id)
+    if date_from:
+        where.append(f"{prefix}timestamp >= ?")
+        params.append(f"{date_from}T00:00:00Z")
+    if date_to:
+        where.append(f"{prefix}timestamp <= ?")
+        params.append(f"{date_to}T23:59:59Z")
+    return where, params
+
+
+def _transcript_stats(conn, base_where, base_params, q):
+    where = list(base_where)
+    params = list(base_params)
+    if q:
+        where.append("(LOWER(original_text) LIKE ? OR LOWER(COALESCE(translated_text, '')) LIKE ?)")
+        like = f"%{q.lower()}%"
+        params.extend([like, like])
+    if not where:
+        where.append("1 = 1")
+    stats = dict(conn.execute(
+        f"""
+        SELECT COUNT(*) AS transcript_count,
+               COUNT(DISTINCT stream_id) AS transcript_stream_count
+        FROM transcripts
+        WHERE {" AND ".join(where)}
+        """,
+        params,
+    ).fetchone())
+    languages = conn.execute(
+        f"""
+        SELECT COALESCE(detected_language, 'unknown') AS language, COUNT(*) AS count
+        FROM transcripts
+        WHERE {" AND ".join(where)}
+        GROUP BY COALESCE(detected_language, 'unknown')
+        ORDER BY COUNT(*) DESC
+        LIMIT 8
+        """,
+        params,
+    ).fetchall()
+    stats["languages"] = [dict(r) for r in languages]
+    return stats
+
+
+@app.route("/api/search/transcripts")
+def api_search_transcripts():
+    q = (request.args.get("q") or "").strip()
+    limit = min(max(request.args.get("limit", 50, type=int), 1), 200)
+    offset = max(request.args.get("offset", 0, type=int), 0)
+    sort = (request.args.get("sort") or "newest").strip().lower()
+    if sort not in {"newest", "oldest"}:
+        sort = "newest"
+    order = "DESC" if sort == "newest" else "ASC"
+
+    conn = get_db()
+    try:
+        base_where, base_params = _search_filters()
+        results = None
+        if q:
+            match = _fts_query(q)
+            if match:
+                try:
+                    alias_where, alias_params = _search_filters(alias="t")
+                    rows = conn.execute(
+                        f"""
+                        SELECT t.id, t.username, t.stream_id, t.original_text,
+                               t.translated_text, t.detected_language, t.target_lang,
+                               t.chunk_index, t.timestamp
+                        FROM transcripts_fts
+                        JOIN transcripts t ON t.id = transcripts_fts.rowid
+                        WHERE {" AND ".join(["transcripts_fts MATCH ?"] + alias_where)}
+                        ORDER BY t.timestamp {order}, t.id {order}
+                        LIMIT ? OFFSET ?
+                        """,
+                        [match] + alias_params + [limit, offset],
+                    ).fetchall()
+                    results = [dict(r) for r in rows]
+                except sqlite3.OperationalError:
+                    results = None
+            if results is None:
+                like_where = base_where + [
+                    "(LOWER(original_text) LIKE ? OR LOWER(COALESCE(translated_text, '')) LIKE ?)"
+                ]
+                like_params = base_params + [f"%{q.lower()}%", f"%{q.lower()}%"]
+                rows = conn.execute(
+                    f"""
+                    SELECT id, username, stream_id, original_text, translated_text,
+                           detected_language, target_lang, chunk_index, timestamp
+                    FROM transcripts
+                    WHERE {" AND ".join(like_where)}
+                    ORDER BY timestamp {order}, id {order}
+                    LIMIT ? OFFSET ?
+                    """,
+                    like_params + [limit, offset],
+                ).fetchall()
+                results = [dict(r) for r in rows]
+        else:
+            where = base_where or ["1 = 1"]
+            rows = conn.execute(
+                f"""
+                SELECT id, username, stream_id, original_text, translated_text,
+                       detected_language, target_lang, chunk_index, timestamp
+                FROM transcripts
+                WHERE {" AND ".join(where)}
+                ORDER BY timestamp {order}, id {order}
+                LIMIT ? OFFSET ?
+                """,
+                base_params + [limit, offset],
+            ).fetchall()
+            results = [dict(r) for r in rows]
+
+        return jsonify({
+            "results": results,
+            "count": len(results),
+            "stats": _transcript_stats(conn, base_where, base_params, q),
+        })
     finally:
         conn.close()
 

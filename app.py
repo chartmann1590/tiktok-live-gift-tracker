@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import asyncio
 import time
+import re
 from datetime import datetime, timezone
 
 import requests as http_requests
@@ -137,6 +138,12 @@ def init_db():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_messages(timestamp)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chat_sender_uid ON chat_messages(sender_unique_id)"
+    )
     cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_messages)").fetchall()}
     if "msg_id" not in cols:
         conn.execute("ALTER TABLE chat_messages ADD COLUMN msg_id TEXT")
@@ -210,8 +217,43 @@ def init_db():
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_viewers_stream ON viewer_samples(username, stream_id, timestamp)"
     )
+    _init_chat_search_index(conn)
     conn.commit()
     conn.close()
+
+
+def _init_chat_search_index(conn):
+    try:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS chat_messages_fts
+            USING fts5(message, content='chat_messages', content_rowid='id')
+            """
+        )
+        conn.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS chat_messages_ai AFTER INSERT ON chat_messages BEGIN
+                INSERT INTO chat_messages_fts(rowid, message) VALUES (new.id, new.message);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chat_messages_ad AFTER DELETE ON chat_messages BEGIN
+                INSERT INTO chat_messages_fts(chat_messages_fts, rowid, message)
+                VALUES('delete', old.id, old.message);
+            END;
+            CREATE TRIGGER IF NOT EXISTS chat_messages_au AFTER UPDATE OF message ON chat_messages BEGIN
+                INSERT INTO chat_messages_fts(chat_messages_fts, rowid, message)
+                VALUES('delete', old.id, old.message);
+                INSERT INTO chat_messages_fts(rowid, message) VALUES (new.id, new.message);
+            END;
+            """
+        )
+        row = conn.execute("SELECT COUNT(*) AS cnt FROM chat_messages_fts").fetchone()
+        source = conn.execute("SELECT COUNT(*) AS cnt FROM chat_messages").fetchone()
+        if row["cnt"] == 0 and source["cnt"] > 0:
+            conn.execute(
+                "INSERT INTO chat_messages_fts(rowid, message) SELECT id, message FROM chat_messages"
+            )
+    except sqlite3.OperationalError as e:
+        print(f"[search] SQLite FTS unavailable for chat search; using LIKE fallback: {e}")
 
 
 def normalize_username(username: str) -> str:
@@ -1213,6 +1255,11 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/search")
+def search_page():
+    return render_template("search.html")
+
+
 @app.route("/api/listen", methods=["POST"])
 def api_listen():
     data = request.get_json(silent=True) or {}
@@ -1749,6 +1796,349 @@ def api_chat_clear(username):
         return jsonify({"status": "cleared", "deleted": deleted, "username": username})
     finally:
         conn.close()
+
+
+_FTS_TOKEN_RE = re.compile(r'"[^"]+"|\S+')
+
+
+def _clean_filter(value: str | None, *, username: bool = False) -> str:
+    value = (value or "").strip()
+    if username:
+        value = value.lstrip("@").lower()
+    return value
+
+
+def _parse_search_args():
+    limit = min(max(request.args.get("limit", 50, type=int), 1), 200)
+    offset = max(request.args.get("offset", 0, type=int), 0)
+    result_type = (request.args.get("type") or "all").strip().lower()
+    if result_type not in {"all", "chat", "transcript"}:
+        result_type = "all"
+    sort = (request.args.get("sort") or "newest").strip().lower()
+    if sort not in {"newest", "oldest"}:
+        sort = "newest"
+    return {
+        "q": (request.args.get("q") or "").strip(),
+        "type": result_type,
+        "username": _clean_filter(request.args.get("username"), username=True),
+        "sender": _clean_filter(request.args.get("sender"), username=True),
+        "stream_id": _clean_filter(request.args.get("stream_id")),
+        "date_from": _clean_filter(request.args.get("date_from")),
+        "date_to": _clean_filter(request.args.get("date_to")),
+        "sort": sort,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _fts_query(text: str) -> str:
+    tokens = []
+    for raw in _FTS_TOKEN_RE.findall(text):
+        token = raw.strip().strip('"')
+        if not token:
+            continue
+        escaped = token.replace('"', '""')
+        tokens.append(f'"{escaped}"')
+    return " AND ".join(tokens)
+
+
+def _chat_where(args, include_sender=True, alias=""):
+    prefix = f"{alias}." if alias else ""
+    where = []
+    params = []
+    if args["username"]:
+        where.append(f"{prefix}username = ?")
+        params.append(args["username"])
+    if include_sender and args["sender"]:
+        where.append(f"(LOWER({prefix}sender) = ? OR LOWER(COALESCE({prefix}sender_unique_id, '')) = ?)")
+        params.extend([args["sender"], args["sender"]])
+    if args["stream_id"]:
+        where.append(f"{prefix}stream_id = ?")
+        params.append(args["stream_id"])
+    if args["date_from"]:
+        where.append(f"{prefix}timestamp >= ?")
+        params.append(f"{args['date_from']}T00:00:00Z")
+    if args["date_to"]:
+        where.append(f"{prefix}timestamp <= ?")
+        params.append(f"{args['date_to']}T23:59:59Z")
+    return where, params
+
+
+def _query_chat_search(conn, args, *, limit=None, offset=None):
+    limit = args["limit"] if limit is None else limit
+    offset = args["offset"] if offset is None else offset
+    order = "DESC" if args["sort"] == "newest" else "ASC"
+    where, params = _chat_where(args)
+    q = args["q"]
+
+    if q:
+        match = _fts_query(q)
+        if match:
+            try:
+                c_where, c_params = _chat_where(args, alias="c")
+                sql_where = ["chat_messages_fts MATCH ?"] + c_where
+                rows = conn.execute(
+                    f"""
+                    SELECT c.id, c.username, c.sender, c.sender_unique_id, c.message,
+                           c.stream_id, c.timestamp
+                    FROM chat_messages_fts
+                    JOIN chat_messages c ON c.id = chat_messages_fts.rowid
+                    WHERE {" AND ".join(sql_where)}
+                    ORDER BY c.timestamp {order}, c.id {order}
+                    LIMIT ? OFFSET ?
+                    """,
+                    [match] + c_params + [limit, offset],
+                ).fetchall()
+                return [_chat_result(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass
+        where.append("LOWER(message) LIKE ?")
+        params.append(f"%{q.lower()}%")
+
+    if not where:
+        where.append("1 = 1")
+    rows = conn.execute(
+        f"""
+        SELECT id, username, sender, sender_unique_id, message, stream_id, timestamp
+        FROM chat_messages
+        WHERE {" AND ".join(where)}
+        ORDER BY timestamp {order}, id {order}
+        LIMIT ? OFFSET ?
+        """,
+        params + [limit, offset],
+    ).fetchall()
+    return [_chat_result(r) for r in rows]
+
+
+def _chat_result(row):
+    return {
+        "type": "chat",
+        "id": row["id"],
+        "username": row["username"],
+        "sender": row["sender"],
+        "sender_unique_id": row["sender_unique_id"],
+        "text": row["message"],
+        "stream_id": row["stream_id"],
+        "timestamp": row["timestamp"],
+    }
+
+
+def _chat_search_stats(conn, args):
+    where, params = _chat_where(args)
+    if args["q"]:
+        where.append("LOWER(message) LIKE ?")
+        params.append(f"%{args['q'].lower()}%")
+    if not where:
+        where.append("1 = 1")
+    return dict(conn.execute(
+        f"""
+        SELECT COUNT(*) AS chat_count,
+               COUNT(DISTINCT stream_id) AS chat_stream_count,
+               COUNT(DISTINCT sender) AS unique_chatters
+        FROM chat_messages
+        WHERE {" AND ".join(where)}
+        """,
+        params,
+    ).fetchone())
+
+
+def _gift_stats(conn, args):
+    where = []
+    params = []
+    if args["username"]:
+        where.append("username = ?")
+        params.append(args["username"])
+    if args["sender"]:
+        where.append("LOWER(sender) = ?")
+        params.append(args["sender"])
+    if args["stream_id"]:
+        where.append("stream_id = ?")
+        params.append(args["stream_id"])
+    if args["date_from"]:
+        where.append("timestamp >= ?")
+        params.append(f"{args['date_from']}T00:00:00Z")
+    if args["date_to"]:
+        where.append("timestamp <= ?")
+        params.append(f"{args['date_to']}T23:59:59Z")
+    if not where:
+        where.append("1 = 1")
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS gift_count,
+               COALESCE(SUM(diamond_value), 0) AS diamond_total,
+               ROUND(COALESCE(SUM(usd_value), 0), 2) AS usd_total,
+               COUNT(DISTINCT stream_id) AS gift_stream_count
+        FROM gifts
+        WHERE {" AND ".join(where)}
+        """,
+        params,
+    ).fetchone()
+    return dict(row)
+
+
+def _participant_stats(conn, args):
+    where = []
+    params = []
+    if args["username"]:
+        where.append("username = ?")
+        params.append(args["username"])
+    if args["sender"]:
+        where.append("(LOWER(sender) = ? OR LOWER(COALESCE(sender_unique_id, '')) = ?)")
+        params.extend([args["sender"], args["sender"]])
+    if args["stream_id"]:
+        where.append("stream_id = ?")
+        params.append(args["stream_id"])
+    if not where:
+        where.append("1 = 1")
+    rows = conn.execute(
+        f"""
+        SELECT sender, sender_unique_id,
+               MIN(first_seen) AS first_seen,
+               MAX(last_seen) AS last_seen,
+               SUM(comment_count) AS comment_count,
+               SUM(gift_count) AS gift_count,
+               SUM(share_count) AS share_count,
+               SUM(diamond_total) AS diamond_total,
+               COUNT(DISTINCT stream_id) AS streams
+        FROM stream_participants
+        WHERE {" AND ".join(where)}
+        GROUP BY sender, sender_unique_id
+        ORDER BY (SUM(comment_count) + SUM(gift_count) + SUM(share_count)) DESC,
+                 MAX(last_seen) DESC
+        LIMIT 25
+        """,
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _search_transcripts(args, *, for_stats=False):
+    if not TRANSCRIBER_URL:
+        return {"available": False, "error": "Transcription service is not configured"}
+    if args["sender"]:
+        return {
+            "available": True,
+            "results": [],
+            "stats": {
+                "transcript_count": 0,
+                "transcript_stream_count": 0,
+                "languages": [],
+            },
+        }
+    params = {
+        "q": args["q"],
+        "username": args["username"],
+        "stream_id": args["stream_id"],
+        "date_from": args["date_from"],
+        "date_to": args["date_to"],
+        "sort": args["sort"],
+        "limit": 1 if for_stats else args["limit"],
+        "offset": 0 if for_stats else args["offset"],
+    }
+    try:
+        resp = http_requests.get(
+            f"{TRANSCRIBER_URL}/api/search/transcripts",
+            params={k: v for k, v in params.items() if v not in ("", None)},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json() or {}
+        data["available"] = True
+        return data
+    except http_requests.RequestException as e:
+        return {"available": False, "error": f"Transcription service unavailable: {str(e)}"}
+
+
+@app.route("/api/search")
+def api_search():
+    args = _parse_search_args()
+    combined_limit = args["limit"] if args["type"] != "all" else min(args["limit"] * 2, 200)
+    results = []
+    transcript_status = {"available": bool(TRANSCRIBER_URL)}
+
+    if args["type"] in {"all", "chat"}:
+        conn = get_db()
+        try:
+            results.extend(_query_chat_search(conn, args, limit=combined_limit, offset=args["offset"]))
+        finally:
+            conn.close()
+
+    if args["type"] in {"all", "transcript"}:
+        transcript_data = _search_transcripts(args)
+        transcript_status = {
+            "available": transcript_data.get("available", False),
+            "error": transcript_data.get("error"),
+        }
+        for r in transcript_data.get("results", []):
+            results.append({
+                "type": "transcript",
+                "id": r.get("id"),
+                "username": r.get("username"),
+                "sender": None,
+                "sender_unique_id": None,
+                "text": r.get("original_text") or "",
+                "translated_text": r.get("translated_text") or "",
+                "detected_language": r.get("detected_language"),
+                "target_lang": r.get("target_lang"),
+                "stream_id": r.get("stream_id"),
+                "timestamp": r.get("timestamp"),
+            })
+
+    reverse = args["sort"] == "newest"
+    results.sort(key=lambda r: (r.get("timestamp") or "", r.get("id") or 0), reverse=reverse)
+    if args["type"] == "all":
+        results = results[:args["limit"]]
+
+    return jsonify({
+        "results": results,
+        "count": len(results),
+        "filters": {k: v for k, v in args.items() if k not in {"limit", "offset"}},
+        "transcripts": transcript_status,
+    })
+
+
+@app.route("/api/search/stats")
+def api_search_stats():
+    args = _parse_search_args()
+    conn = get_db()
+    try:
+        chat_stats = _chat_search_stats(conn, args)
+        gift_stats = _gift_stats(conn, args)
+        participants = _participant_stats(conn, args)
+        stream_row = conn.execute(
+            """
+            SELECT COUNT(*) AS tracked_users FROM tracked_users
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+
+    transcript_data = _search_transcripts(args, for_stats=True)
+    transcript_stats = transcript_data.get("stats") or {
+        "transcript_count": 0,
+        "transcript_stream_count": 0,
+        "languages": [],
+    }
+    stream_count = len({
+        *([] if not chat_stats.get("chat_stream_count") else ["chat"]),
+        *([] if not gift_stats.get("gift_stream_count") else ["gift"]),
+    })
+
+    return jsonify({
+        "chat": chat_stats,
+        "gifts": gift_stats,
+        "participants": participants,
+        "transcripts": {
+            **transcript_stats,
+            "available": transcript_data.get("available", False),
+            "error": transcript_data.get("error"),
+        },
+        "totals": {
+            "tracked_users": stream_row["tracked_users"],
+            "matching_messages": chat_stats.get("chat_count", 0) + transcript_stats.get("transcript_count", 0),
+            "matching_stream_groups": stream_count + transcript_stats.get("transcript_stream_count", 0),
+        },
+    })
 
 
 def _detected_language_from_lt(result: dict) -> str | None:
