@@ -846,11 +846,19 @@ async def _run_listener(username: str):
         stream_id_holder = [None]
         gift_catalog: dict[int, int] = {}
         _recent_chat: set[str] = set()
+        # TikTokLive disables the websocket library's ping/pong timeout (TikTok's
+        # server never answers pongs), so a silently-dropped TCP connection is
+        # never surfaced as an error - `await task` below would hang forever
+        # with "live" stuck True and no new events. Track the last time any
+        # event arrived and force a reconnect if the connection goes stale.
+        last_event_holder = [time.time()]
+        STALE_CONNECTION_SECS = 90
 
         @client.on(ConnectEvent)
         async def on_connect(event: ConnectEvent):
             stream_id_holder[0] = str(client.room_id)
             _recent_chat.clear()
+            last_event_holder[0] = time.time()
             connected.set()
             with active_lock:
                 if username in active_listeners:
@@ -1015,6 +1023,7 @@ async def _run_listener(username: str):
 
         @client.on(RoomUserSeqEvent)
         async def on_room_user_seq(event: RoomUserSeqEvent):
+            last_event_holder[0] = time.time()
             try:
                 viewer_count = int(getattr(event, "m_total", 0) or 0)
                 # TikTok populates either m_contributors (ranked donors) or seats
@@ -1152,7 +1161,22 @@ async def _run_listener(username: str):
                 with active_lock:
                     if username in active_listeners:
                         active_listeners[username]["live"] = True
-                await task
+
+                async def _watch_for_stale_connection():
+                    while True:
+                        await asyncio.sleep(15)
+                        if time.time() - last_event_holder[0] > STALE_CONNECTION_SECS:
+                            try:
+                                await client.disconnect()
+                            except Exception:
+                                pass
+                            return
+
+                watchdog_task = asyncio.ensure_future(_watch_for_stale_connection())
+                try:
+                    await task
+                finally:
+                    watchdog_task.cancel()
         except Exception:
             pass
         finally:
